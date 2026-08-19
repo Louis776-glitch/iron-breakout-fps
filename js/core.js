@@ -87,6 +87,9 @@ const platforms = [];
 const ladderZones = [];
 const raycastWorld = [];
 const spawnPoints = [];
+// 狙击塔顶出生位与地面导航数据分开保存：普通敌人只使用地面网格，
+// 塔顶敌人也不会因为选择了地面巡逻点而从高处走出平台。
+const sniperTowerSpawns = [];
 const respawnTimers = [];
 const pickups = [];
 const pickupRespawnTimers = [];
@@ -123,6 +126,7 @@ let aiming = false;
 let lastEmptyAmmoNotice = -Infinity;
 let outerExpansionBuilt = false;
 let minimapUpdateTimer = 0;
+let groundNavigation = null;
 
 // 边长由 72 扩为 104，实际可探索面积约为原来的 2.1 倍。
 const MAP_SIZE = 104;
@@ -1144,6 +1148,136 @@ function addWatchTower(x, z, topY, ladderSide) {
   }
 }
 
+// -----------------------------------------------------------------------
+// 高层狙击塔
+// -----------------------------------------------------------------------
+// 塔高约等于三段普通工业梯（2.75 米 × 3）。塔顶出生位单独登记，
+// 不会混入一层 spawnPoints，也不会改变普通敌人“不会爬梯子”的规则。
+const SNIPER_TOWER_HEIGHT = 8.25;
+const SNIPER_TOWER_SIZE = 5.8;
+
+function addSniperTowerRail(x, z, size, ladderSide, topY) {
+  const railHeight = 1.05;
+  const railThickness = 0.16;
+  const railY = topY + railHeight / 2;
+  const openingWidth = 1.65;
+  const sideSegment = (size - openingWidth) / 2;
+
+  function addHorizontalRail(railZ, split) {
+    if (!split) {
+      addBox(x, railY, railZ, size, railHeight, railThickness, metalMaterial);
+      return;
+    }
+    const offset = openingWidth / 2 + sideSegment / 2;
+    addBox(x - offset, railY, railZ, sideSegment, railHeight, railThickness, metalMaterial);
+    addBox(x + offset, railY, railZ, sideSegment, railHeight, railThickness, metalMaterial);
+  }
+
+  function addVerticalRail(railX, split) {
+    if (!split) {
+      addBox(railX, railY, z, railThickness, railHeight, size, metalMaterial);
+      return;
+    }
+    const offset = openingWidth / 2 + sideSegment / 2;
+    addBox(railX, railY, z - offset, railThickness, railHeight, sideSegment, metalMaterial);
+    addBox(railX, railY, z + offset, railThickness, railHeight, sideSegment, metalMaterial);
+  }
+
+  addHorizontalRail(z - size / 2, ladderSide === "北");
+  addHorizontalRail(z + size / 2, ladderSide === "南");
+  addVerticalRail(x - size / 2, ladderSide === "西");
+  addVerticalRail(x + size / 2, ladderSide === "东");
+}
+
+function addSniperTower(x, z, ladderSide) {
+  const topY = SNIPER_TOWER_HEIGHT;
+  const size = SNIPER_TOWER_SIZE;
+  addPlatform(x, z, size, size, topY);
+  addSniperTowerRail(x, z, size, ladderSide, topY);
+
+  // 梯子仅登记到玩家 ladderZones。敌人 AI 没有任何攀爬入口。
+  if (ladderSide === "南") {
+    addLadder(x, z + size / 2 + 0.35, topY, 0, -1, "横");
+  } else if (ladderSide === "北") {
+    addLadder(x, z - size / 2 - 0.35, topY, 0, 1, "横");
+  } else if (ladderSide === "东") {
+    addLadder(x + size / 2 + 0.35, z, topY, -1, 0, "纵");
+  } else {
+    addLadder(x - size / 2 - 0.35, z, topY, 1, 0, "纵");
+  }
+
+  // 塔顶灯既提供远距离轮廓，也让玩家爬上去后仍能看清平台边缘。
+  addMapLight(x, topY + 1.55, z, 0xffd27a, 3.6, 15);
+
+  sniperTowerSpawns.push({
+    id: sniperTowerSpawns.length,
+    position: new THREE.Vector3(x, topY + 0.025, z),
+    minX: x - size / 2 + 0.78,
+    maxX: x + size / 2 - 0.78,
+    minZ: z - size / 2 + 0.78,
+    maxZ: z + size / 2 - 0.78,
+    topY: topY
+  });
+}
+
+function towerSiteIsClear(x, z, ladderSide) {
+  const half = SNIPER_TOWER_SIZE / 2 + 0.38;
+  let minX = x - half;
+  let maxX = x + half;
+  let minZ = z - half;
+  let maxZ = z + half;
+
+  // 给梯脚和玩家接近梯子的区域再留出 1.5 米净空。
+  if (ladderSide === "南") maxZ += 1.5;
+  else if (ladderSide === "北") minZ -= 1.5;
+  else if (ladderSide === "东") maxX += 1.5;
+  else minX -= 1.5;
+
+  const safeBoundary = MAP_HALF - 1.15;
+  if (
+    minX < -safeBoundary || maxX > safeBoundary ||
+    minZ < -safeBoundary || maxZ > safeBoundary
+  ) {
+    return false;
+  }
+
+  for (const box of colliders) {
+    if (box.maxY < 0.02 || box.minY > SNIPER_TOWER_HEIGHT + 1.2) continue;
+    if (
+      maxX > box.minX && minX < box.maxX &&
+      maxZ > box.minZ && minZ < box.maxZ
+    ) {
+      return false;
+    }
+  }
+
+  for (const tower of sniperTowerSpawns) {
+    if (Math.hypot(tower.position.x - x, tower.position.z - z) < 13) {
+      return false;
+    }
+  }
+
+  return Math.hypot(x - playerStart.x, z - playerStart.z) > 9;
+}
+
+// 从已经确认与玩家出生区连通的一层出生点中寻找塔位。优先靠近每张地图
+// 设计的锚点，若锚点被房间占用则自动寻找最近的安全空地。
+function findSniperTowerSite(preferredX, preferredZ, ladderSide) {
+  const candidates = spawnPoints.slice().sort(function (a, b) {
+    return (
+      Math.hypot(a.x - preferredX, a.z - preferredZ) -
+      Math.hypot(b.x - preferredX, b.z - preferredZ)
+    );
+  });
+
+  for (const point of candidates) {
+    if (towerSiteIsClear(point.x, point.z, ladderSide)) {
+      return { x: point.x, z: point.z, ladderSide: ladderSide };
+    }
+  }
+  return null;
+}
+
 // 带真实门洞的外围环形走廊。普通 addTunnel 的侧墙是完整长墙，
 // 与另一条走廊交叉时仍会保留不可见的碰撞阻挡；这里把内侧墙切成两段。
 function addHorizontalRingTunnel(z, innerSign, openingX, color) {
@@ -1280,8 +1414,10 @@ function addOuterIndustrialRing() {
   });
 
   // 外围高低差、装卸台和低矮掩体让扩展区域也有纵深。
-  addLoadingDock(-25, -43, 9, 4.2, "南");
-  addLoadingDock(25, 43, 9, 4.2, "北");
+  // 装卸台位于只有 5.6 米宽的外围回廊内。缩短台面宽度并减小进深，
+  // 避免平台与走廊侧墙形成狭窄夹缝，让玩家可以从两侧稳定绕行。
+  addLoadingDock(-25, -43, 6.4, 2.6, "南");
+  addLoadingDock(25, 43, 6.4, 2.6, "北");
   addCatwalkSegment(-43, 22, 12, "纵", 2.75);
   addLadder(-40, 22, 2.75, -1, 0, "纵");
   addCatwalkSegment(43, -22, 12, "纵", 2.75);
@@ -1340,6 +1476,7 @@ function addCommonSpawns(includeSharedOuterArea) {
 // 从玩家出生位置进行一层地面洪水搜索，只保留敌人实际能够走到的区域。
 // 这会排除断墙背面、封闭屋顶夹层和地图装饰之间的孤立空间。
 function filterSpawnPointsByReachability() {
+  groundNavigation = null;
   const cellSize = 1;
   const margin = 0.9;
   const navRadius = 0.52;
@@ -1465,6 +1602,16 @@ function filterSpawnPointsByReachability() {
 
   spawnPoints.length = 0;
   spawnPoints.push.apply(spawnPoints, safeSpawns);
+
+  // 保存整张地图的一层连通网格。敌人会基于它规划跨房间、跨走廊路线，
+  // 而不是只朝目标直线行走并在第一堵墙前反复改向。
+  groundNavigation = {
+    cellSize: cellSize,
+    originX: originX,
+    originZ: originZ,
+    cellsPerSide: cellsPerSide,
+    reachable: reachable
+  };
 }
 
 function addDoorFrame(x, z, orientation, width, height) {
