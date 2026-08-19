@@ -1,6 +1,6 @@
 # 钢铁突围（Iron Breakout FPS）
 
-一款使用 Three.js 制作的单文件浏览器第一人称射击游戏。除 Three.js CDN 外，地图、角色、武器、墙画、特效和界面全部由 HTML、CSS、JavaScript 与程序几何体生成，不需要额外素材文件。
+一款使用 Three.js 制作的浏览器第一人称射击游戏。除 Three.js CDN 外，地图、角色、武器、墙画、特效和界面全部由 HTML、CSS、JavaScript 与程序几何体生成，不需要额外图片或模型素材。
 
 ## 游戏特色
 
@@ -29,6 +29,22 @@
 ## 运行游戏
 
 下载仓库后直接双击 `index.html`，或使用任意静态文件服务器打开。首次加载需要联网获取 Three.js CDN 脚本。
+
+## 项目结构
+
+```text
+iron-breakout-fps/
+├─ index.html          # 页面结构与源码加载入口
+├─ css/
+│  └─ game.css         # HUD、菜单、瞄准镜和响应式界面样式
+└─ js/
+   ├─ core.js          # 渲染环境、游戏状态、碰撞、地图基础组件
+   ├─ maps.js          # 五张无尽地图与五个关卡地图
+   ├─ weapons.js       # 武器、弹药、换弹和随机补给
+   ├─ enemies.js       # 敌人模型、生成、巡逻、追击与射击 AI
+   ├─ combat.js        # 射击、弹道、命中特效、玩家生命与移动
+   └─ main.js          # 模式流程、输入事件和游戏主循环
+```
 
 ## 技术栈
 
