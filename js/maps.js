@@ -1071,6 +1071,68 @@ const levelMapBuilders = [
   buildLevelFive
 ];
 
+// 每张地图使用不同方向的锚点寻找狙击塔位置。实际位置会在地图建成后
+// 从可达地面中自动微调，因此不会与房间、暗道、家具或玩家出生点重叠。
+const sniperTowerLayouts = {
+  "废弃联合厂区": [
+    [-34, 28, "南"],
+    [34, -28, "北"]
+  ],
+  "地下转运站": [
+    [-35, -31, "东"],
+    [35, 31, "西"]
+  ],
+  "坍塌钢铁厂": [
+    [-33, 30, "东"],
+    [34, -30, "西"]
+  ],
+  "双环冷却厂": [
+    [-35, -29, "南"],
+    [35, 29, "北"]
+  ],
+  "蛇形后勤堡垒": [
+    [-36, 8, "东"],
+    [36, -8, "西"]
+  ],
+  "第一关：旧机修仓": [
+    [-31, 9, "东"],
+    [31, -9, "西"]
+  ],
+  "第二关：物流仓库群": [
+    [-32, -8, "东"],
+    [32, 8, "西"]
+  ],
+  "第三关：地下动力区": [
+    [-32, 15, "东"],
+    [32, -15, "西"]
+  ],
+  "第四关：高架铸造车间": [
+    [-32, -18, "南"],
+    [32, 18, "北"]
+  ],
+  "第五关：坍塌核心工厂": [
+    [-33, 20, "东"],
+    [33, -20, "西"]
+  ]
+};
+
+function addSniperTowersForCurrentMap() {
+  const layout = sniperTowerLayouts[currentMapName] || [];
+  for (const anchor of layout) {
+    const directions = ["北", "东", "南", "西"];
+    const preferredDirection = anchor[2];
+    directions.splice(directions.indexOf(preferredDirection), 1);
+    directions.unshift(preferredDirection);
+
+    let site = null;
+    for (const direction of directions) {
+      site = findSniperTowerSite(anchor[0], anchor[1], direction);
+      if (site) break;
+    }
+    if (site) addSniperTower(site.x, site.z, site.ladderSide);
+  }
+}
+
 function clearMap() {
   if (mapRoot) {
     scene.remove(mapRoot);
@@ -1095,6 +1157,8 @@ function clearMap() {
   ladderZones.length = 0;
   raycastWorld.length = 0;
   spawnPoints.length = 0;
+  sniperTowerSpawns.length = 0;
+  groundNavigation = null;
   outerExpansionBuilt = false;
 }
 
@@ -1110,9 +1174,15 @@ function loadCurrentMap() {
   // 无尽与关卡地图共用装饰阶段，墙画、家具都会参与当前地图生命周期。
   decorateCurrentMap();
 
-  // 立即刷新建筑矩阵，保证首帧碰撞射线和敌人视线检测使用新地图坐标。
+  // 先计算一次一层连通区域，狙击塔会从这些可达地面点附近选址；建塔后
+  // 再重算一次导航，保证塔柱和梯脚也进入最终碰撞与寻路数据。
   mapRoot.updateMatrixWorld(true);
   filterSpawnPointsByReachability();
+  addSniperTowersForCurrentMap();
+  mapRoot.updateMatrixWorld(true);
+  filterSpawnPointsByReachability();
+
+  // 立即刷新建筑矩阵，保证首帧碰撞射线和敌人视线检测使用新地图坐标。
   rebuildMinimapStatic();
   minimapUpdateTimer = 0;
   // 老厂房仍保留明暗层次，但任何地图都不会再低于这个基础亮度。

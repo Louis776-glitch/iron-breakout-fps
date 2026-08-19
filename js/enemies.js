@@ -76,15 +76,26 @@ function getDifficultyStats() {
   };
 }
 
-function randomPatrolPoint() {
-  for (let attempt = 0; attempt < 40; attempt++) {
-    if (spawnPoints.length > 0) {
-      const point = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
-      if (!collidesAt(point.x, point.z, 0.65, 0, 1.8)) {
-        return point.clone();
-      }
+function randomPatrolPoint(origin) {
+  let bestPoint = null;
+  let bestDistance = -1;
+
+  // 从全地图可达出生点中挑选较远目标，避免敌人只在出生房间附近打转。
+  // 目标之间的实际移动由下方连通网格寻路完成。
+  for (let attempt = 0; attempt < 72; attempt++) {
+    if (spawnPoints.length <= 0) break;
+    const point = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
+    if (collidesAt(point.x, point.z, 0.65, 0, 1.8)) continue;
+    const distance = origin
+      ? Math.hypot(point.x - origin.x, point.z - origin.z)
+      : 0;
+    if (distance > bestDistance) {
+      bestDistance = distance;
+      bestPoint = point;
     }
   }
+
+  if (bestPoint) return bestPoint.clone();
   return spawnPoints.length > 0
     ? spawnPoints[0].clone()
     : findNearestSafePosition(
@@ -92,6 +103,156 @@ function randomPatrolPoint() {
         0.65,
         1.8
       );
+}
+
+function nearestReachableNavigationIndex(point) {
+  if (!groundNavigation) return -1;
+  const navigation = groundNavigation;
+  const side = navigation.cellsPerSide;
+  const baseX = THREE.MathUtils.clamp(
+    Math.round((point.x - navigation.originX) / navigation.cellSize),
+    0,
+    side - 1
+  );
+  const baseZ = THREE.MathUtils.clamp(
+    Math.round((point.z - navigation.originZ) / navigation.cellSize),
+    0,
+    side - 1
+  );
+  const directIndex = baseZ * side + baseX;
+  if (navigation.reachable[directIndex]) return directIndex;
+
+  for (let radius = 1; radius <= 6; radius++) {
+    for (let dz = -radius; dz <= radius; dz++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
+        const x = baseX + dx;
+        const z = baseZ + dz;
+        if (x < 0 || x >= side || z < 0 || z >= side) continue;
+        const index = z * side + x;
+        if (navigation.reachable[index]) return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function buildGroundPatrolPath(start, destination) {
+  if (!groundNavigation) return [destination.clone()];
+  const navigation = groundNavigation;
+  const side = navigation.cellsPerSide;
+  const total = side * side;
+  const startIndex = nearestReachableNavigationIndex(start);
+  const destinationIndex = nearestReachableNavigationIndex(destination);
+  if (startIndex < 0 || destinationIndex < 0) return [destination.clone()];
+
+  const previous = new Int32Array(total);
+  previous.fill(-1);
+  const queue = new Int32Array(total);
+  let queueHead = 0;
+  let queueTail = 0;
+  queue[queueTail++] = startIndex;
+  previous[startIndex] = startIndex;
+
+  while (queueHead < queueTail && previous[destinationIndex] < 0) {
+    const index = queue[queueHead++];
+    const x = index % side;
+    const z = Math.floor(index / side);
+    const neighbors = [index - 1, index + 1, index - side, index + side];
+
+    for (let direction = 0; direction < 4; direction++) {
+      if (direction === 0 && x <= 0) continue;
+      if (direction === 1 && x >= side - 1) continue;
+      if (direction === 2 && z <= 0) continue;
+      if (direction === 3 && z >= side - 1) continue;
+      const nextIndex = neighbors[direction];
+      if (
+        !navigation.reachable[nextIndex] ||
+        previous[nextIndex] >= 0
+      ) {
+        continue;
+      }
+      previous[nextIndex] = index;
+      queue[queueTail++] = nextIndex;
+    }
+  }
+
+  if (previous[destinationIndex] < 0) return [destination.clone()];
+
+  const cellPath = [];
+  let cursor = destinationIndex;
+  while (cursor !== startIndex) {
+    cellPath.push(cursor);
+    cursor = previous[cursor];
+  }
+  cellPath.push(startIndex);
+  cellPath.reverse();
+
+  // 只保留拐点和约每四米一个中继点，既不会穿过墙角，也不会让 AI
+  // 每一米都重新计算方向。
+  const waypoints = [];
+  let lastAddedPathIndex = 0;
+  let previousDirectionX = 0;
+  let previousDirectionZ = 0;
+
+  function addWaypointFromCell(pathIndex) {
+    if (pathIndex <= 0 || pathIndex >= cellPath.length) return;
+    const index = cellPath[pathIndex];
+    const xIndex = index % side;
+    const zIndex = Math.floor(index / side);
+    const point = new THREE.Vector3(
+      navigation.originX + xIndex * navigation.cellSize,
+      0,
+      navigation.originZ + zIndex * navigation.cellSize
+    );
+    const last = waypoints[waypoints.length - 1];
+    if (!last || last.distanceToSquared(point) > 0.01) waypoints.push(point);
+    lastAddedPathIndex = pathIndex;
+  }
+
+  for (let i = 1; i < cellPath.length; i++) {
+    const previousCell = cellPath[i - 1];
+    const currentCell = cellPath[i];
+    const directionX = currentCell % side - previousCell % side;
+    const directionZ =
+      Math.floor(currentCell / side) - Math.floor(previousCell / side);
+
+    if (
+      i > 1 &&
+      (directionX !== previousDirectionX || directionZ !== previousDirectionZ)
+    ) {
+      addWaypointFromCell(i - 1);
+    }
+    if (i - lastAddedPathIndex >= 4) addWaypointFromCell(i);
+    previousDirectionX = directionX;
+    previousDirectionZ = directionZ;
+  }
+  addWaypointFromCell(cellPath.length - 1);
+  return waypoints.length > 0 ? waypoints : [destination.clone()];
+}
+
+function randomTowerPatrolPoint(tower) {
+  return new THREE.Vector3(
+    THREE.MathUtils.randFloat(tower.minX, tower.maxX),
+    tower.topY + 0.025,
+    THREE.MathUtils.randFloat(tower.minZ, tower.maxZ)
+  );
+}
+
+function setEnemyPatrolRoute(enemy) {
+  if (enemy.isTowerGuard) {
+    enemy.patrolTarget.copy(randomTowerPatrolPoint(enemy.towerZone));
+    enemy.patrolPath = [enemy.patrolTarget.clone()];
+    enemy.patrolIndex = 0;
+    return;
+  }
+
+  enemy.patrolTarget.copy(randomPatrolPoint(enemy.group.position));
+  enemy.patrolPath = buildGroundPatrolPath(
+    enemy.group.position,
+    enemy.patrolTarget
+  );
+  enemy.patrolIndex = 0;
 }
 
 function chooseSpawnPoint() {
@@ -118,9 +279,38 @@ function chooseSpawnPoint() {
   return fallback.clone();
 }
 
+function hasLivingTowerGuard() {
+  for (const enemy of enemies) {
+    if (enemy.alive && enemy.isTowerGuard) return true;
+  }
+  return false;
+}
+
+function chooseSniperTowerSpawn() {
+  // 只有“正常需要创建一名敌人”时才会调用本函数。塔顶已有敌人时概率
+  // 直接归零；塔顶空缺时每次正常补兵有 20% 概率选择任意一座塔。
+  if (
+    sniperTowerSpawns.length <= 0 ||
+    hasLivingTowerGuard() ||
+    Math.random() >= 0.2
+  ) {
+    return null;
+  }
+
+  const candidates = sniperTowerSpawns.filter(function (tower) {
+    return Math.hypot(
+      tower.position.x - player.position.x,
+      tower.position.z - player.position.z
+    ) >= 10;
+  });
+  const pool = candidates.length > 0 ? candidates : sniperTowerSpawns;
+  return pool[Math.floor(Math.random() * pool.length)] || null;
+}
+
 function createEnemy() {
   const stats = getDifficultyStats();
-  const spawn = chooseSpawnPoint();
+  const towerZone = chooseSniperTowerSpawn();
+  const spawn = towerZone ? towerZone.position.clone() : chooseSpawnPoint();
 
   const enemy = {
     group: new THREE.Group(),
@@ -128,15 +318,19 @@ function createEnemy() {
     health: stats.health,
     alive: true,
     radius: 0.43,
-    patrolTarget: randomPatrolPoint(),
-    detectionRange: stats.detection,
+    patrolTarget: spawn.clone(),
+    patrolPath: [],
+    patrolIndex: 0,
+    isTowerGuard: Boolean(towerZone),
+    towerZone: towerZone,
+    detectionRange: towerZone ? Math.max(48, stats.detection) : stats.detection,
     attackRange: 1.55,
-    speed: stats.speed,
+    speed: towerZone ? stats.speed * 0.58 : stats.speed,
     damage: stats.damage,
     shotDamage: stats.shotDamage,
-    fireInterval: stats.fireInterval,
-    accuracy: stats.accuracy,
-    shootRange: stats.shootRange,
+    fireInterval: towerZone ? stats.fireInterval * 1.18 : stats.fireInterval,
+    accuracy: towerZone ? Math.min(0.9, stats.accuracy + 0.12) : stats.accuracy,
+    shootRange: towerZone ? Math.max(52, stats.shootRange) : stats.shootRange,
     shotCooldown: THREE.MathUtils.randFloat(0.8, 1.8),
     muzzleTimer: 0,
     visionTimer: Math.random() * 0.2,
@@ -144,11 +338,15 @@ function createEnemy() {
     blockedTime: 0,
     avoidTimer: 0,
     avoidDirection: new THREE.Vector3(),
+    pursuitTimer: 0,
+    pursuitCooldown: THREE.MathUtils.randFloat(0.4, 2.8),
+    wasPursuing: false,
     walkPhase: Math.random() * Math.PI * 2
   };
 
   enemy.group.position.copy(spawn);
   resolveCirclePenetration(enemy.group.position, enemy.radius, 1.85);
+  setEnemyPatrolRoute(enemy);
 
   function addEnemyPart(geometry, material, x, y, z) {
     const mesh = new THREE.Mesh(geometry, material);
@@ -385,23 +583,37 @@ function updateEnemyAI(delta) {
   for (const enemy of enemies) {
     if (!enemy.alive) continue;
 
-    resolveCirclePenetration(enemy.group.position, enemy.radius, 1.85);
-    if (collidesAt(
-      enemy.group.position.x,
-      enemy.group.position.z,
-      enemy.radius,
-      enemy.group.position.y,
-      1.85
-    )) {
-      enemy.group.position.copy(chooseSpawnPoint());
-      enemy.patrolTarget.copy(randomPatrolPoint());
-      enemy.hasLineOfSight = false;
-      enemy.shotCooldown = Math.max(enemy.shotCooldown, 0.8);
+    if (enemy.isTowerGuard) {
+      // 塔顶敌人只在护栏内巡逻，不参与任何梯子或一层导航计算。
+      enemy.group.position.y = enemy.towerZone.topY + 0.025;
+      enemy.group.position.x = THREE.MathUtils.clamp(
+        enemy.group.position.x,
+        enemy.towerZone.minX,
+        enemy.towerZone.maxX
+      );
+      enemy.group.position.z = THREE.MathUtils.clamp(
+        enemy.group.position.z,
+        enemy.towerZone.minZ,
+        enemy.towerZone.maxZ
+      );
+      resolveCirclePenetration(enemy.group.position, enemy.radius, 1.85);
+    } else {
+      resolveCirclePenetration(enemy.group.position, enemy.radius, 1.85);
+      if (collidesAt(
+        enemy.group.position.x,
+        enemy.group.position.z,
+        enemy.radius,
+        enemy.group.position.y,
+        1.85
+      )) {
+        enemy.group.position.copy(chooseSpawnPoint());
+        setEnemyPatrolRoute(enemy);
+        enemy.hasLineOfSight = false;
+        enemy.shotCooldown = Math.max(enemy.shotCooldown, 0.8);
+      }
     }
 
     const distanceToPlayer = enemy.group.position.distanceTo(player.position);
-    const chasing = distanceToPlayer < enemy.detectionRange;
-    const target = chasing ? player.position : enemy.patrolTarget;
 
     enemy.muzzleTimer -= delta;
     if (enemy.muzzleTimer <= 0) {
@@ -410,26 +622,64 @@ function updateEnemyAI(delta) {
     }
 
     enemy.shotCooldown -= delta;
+    enemy.pursuitTimer = Math.max(0, enemy.pursuitTimer - delta);
+    enemy.pursuitCooldown = Math.max(0, enemy.pursuitCooldown - delta);
     enemy.visionTimer -= delta;
     if (enemy.visionTimer <= 0) {
       enemy.hasLineOfSight =
-        chasing &&
-        distanceToPlayer <= enemy.shootRange &&
+        distanceToPlayer <= enemy.detectionRange &&
         enemyCanSeePlayer(enemy, distanceToPlayer);
+
+      // 地面敌人发现玩家后只追击一小段时间，之后进入冷静期并恢复全图
+      // 巡逻；即使玩家仍在附近，也不会无限重置追击计时器。
+      if (
+        !enemy.isTowerGuard &&
+        enemy.hasLineOfSight &&
+        enemy.pursuitTimer <= 0 &&
+        enemy.pursuitCooldown <= 0
+      ) {
+        const pursuitDuration = THREE.MathUtils.randFloat(3.8, 6.4);
+        enemy.pursuitTimer = pursuitDuration;
+        enemy.pursuitCooldown =
+          pursuitDuration + THREE.MathUtils.randFloat(5.2, 8.5);
+      }
       enemy.visionTimer = THREE.MathUtils.randFloat(0.16, 0.27);
     }
+
+    const chasing = !enemy.isTowerGuard && enemy.pursuitTimer > 0;
+    if (enemy.wasPursuing && !chasing) setEnemyPatrolRoute(enemy);
+    enemy.wasPursuing = chasing;
+
     const canShoot =
-      chasing &&
       distanceToPlayer <= enemy.shootRange &&
       enemy.hasLineOfSight;
 
+    if (!chasing && enemy.patrolPath.length <= 0) {
+      setEnemyPatrolRoute(enemy);
+    }
+    let target = chasing
+      ? player.position
+      : enemy.patrolPath[Math.min(
+          enemy.patrolIndex,
+          enemy.patrolPath.length - 1
+        )] || enemy.patrolTarget;
+
     tempVector.subVectors(target, enemy.group.position);
     tempVector.y = 0;
-    const distanceToTarget = tempVector.length();
+    let distanceToTarget = tempVector.length();
 
     if (!chasing && distanceToTarget < 0.8) {
-      enemy.patrolTarget.copy(randomPatrolPoint());
-      continue;
+      enemy.patrolIndex++;
+      if (enemy.patrolIndex >= enemy.patrolPath.length) {
+        setEnemyPatrolRoute(enemy);
+      }
+      target = enemy.patrolPath[Math.min(
+        enemy.patrolIndex,
+        enemy.patrolPath.length - 1
+      )] || enemy.patrolTarget;
+      tempVector.subVectors(target, enemy.group.position);
+      tempVector.y = 0;
+      distanceToTarget = tempVector.length();
     }
 
     if (distanceToTarget > 0.001) {
@@ -440,18 +690,35 @@ function updateEnemyAI(delta) {
         tempVector.copy(enemy.avoidDirection);
       }
 
-      const speed = chasing
-        ? (canShoot && distanceToPlayer < 14 ? enemy.speed * 0.14 : enemy.speed)
-        : enemy.speed * 0.48;
+      const speed = enemy.isTowerGuard
+        ? (canShoot ? 0 : enemy.speed * 0.34)
+        : chasing
+          ? (canShoot && distanceToPlayer < 14 ? enemy.speed * 0.14 : enemy.speed)
+          : enemy.speed * 0.58;
       const step = speed * delta;
 
-      const moved = moveWithCollisions(
-        enemy.group.position,
-        tempVector.x * step,
-        tempVector.z * step,
-        enemy.radius,
-        1.85
-      );
+      const moved = step <= 0.0001
+        ? true
+        : moveWithCollisions(
+            enemy.group.position,
+            tempVector.x * step,
+            tempVector.z * step,
+            enemy.radius,
+            1.85
+          );
+
+      if (enemy.isTowerGuard) {
+        enemy.group.position.x = THREE.MathUtils.clamp(
+          enemy.group.position.x,
+          enemy.towerZone.minX,
+          enemy.towerZone.maxX
+        );
+        enemy.group.position.z = THREE.MathUtils.clamp(
+          enemy.group.position.z,
+          enemy.towerZone.minZ,
+          enemy.towerZone.maxZ
+        );
+      }
 
       if (!moved) {
         enemy.blockedTime += delta;
@@ -463,7 +730,18 @@ function updateEnemyAI(delta) {
         ).normalize();
         enemy.avoidTimer = 0.9 + Math.random() * 0.8;
         if (enemy.blockedTime > 0.65) {
-          enemy.patrolTarget.copy(randomPatrolPoint());
+          if (chasing) {
+            enemy.pursuitTimer = Math.min(enemy.pursuitTimer, 1.1);
+          } else if (enemy.isTowerGuard) {
+            setEnemyPatrolRoute(enemy);
+          } else {
+            enemy.patrolPath = buildGroundPatrolPath(
+              enemy.group.position,
+              enemy.patrolTarget
+            );
+            enemy.patrolIndex = 0;
+            if (enemy.patrolPath.length <= 0) setEnemyPatrolRoute(enemy);
+          }
           enemy.blockedTime = 0;
         }
       } else {
@@ -476,7 +754,7 @@ function updateEnemyAI(delta) {
             -(player.position.z - enemy.group.position.z)
           )
         : Math.atan2(-tempVector.x, -tempVector.z);
-      enemy.walkPhase += delta * (chasing ? 8.5 : 5);
+      enemy.walkPhase += delta * (chasing ? 8.5 : 5.4);
       const swing = Math.sin(enemy.walkPhase) * 0.5;
       enemy.leftLeg.rotation.x = swing;
       enemy.rightLeg.rotation.x = -swing;
