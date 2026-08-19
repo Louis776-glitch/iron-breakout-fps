@@ -27,6 +27,9 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// 场景以静态建筑为主，没有必要每一帧都重绘昂贵的 2048 阴影贴图。
+// 主循环会以较低频率刷新动态阴影，画面仍保持阴影效果，同时显著降低 GPU 峰值。
+renderer.shadowMap.autoUpdate = false;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.58;
@@ -38,6 +41,7 @@ raycaster.far = 160;
 
 const tempVector = new THREE.Vector3();
 const tempVector2 = new THREE.Vector3();
+const tempVector3 = new THREE.Vector3();
 
 // -----------------------------------------------------------------------
 // 界面引用
@@ -127,11 +131,28 @@ let lastEmptyAmmoNotice = -Infinity;
 let outerExpansionBuilt = false;
 let minimapUpdateTimer = 0;
 let groundNavigation = null;
+let shadowRefreshTimer = 0;
 
 // 边长由 72 扩为 104，实际可探索面积约为原来的 2.1 倍。
 const MAP_SIZE = 104;
 const MAP_HALF = MAP_SIZE / 2;
 const LEVEL_ENEMY_TOTAL = 25;
+
+// 把大量墙体碰撞盒划分到二维网格。角色和敌人移动时只检查附近格子，
+// 避免每一帧多次遍历整张复杂地图的全部碰撞体。
+const COLLISION_GRID_CELL_SIZE = 6;
+const COLLISION_GRID_MARGIN = 8;
+const COLLISION_GRID_ORIGIN = -MAP_HALF - COLLISION_GRID_MARGIN;
+const COLLISION_GRID_DIMENSION = Math.ceil(
+  (MAP_SIZE + COLLISION_GRID_MARGIN * 2) / COLLISION_GRID_CELL_SIZE
+) + 1;
+const colliderSpatialGrid = Array.from(
+  { length: COLLISION_GRID_DIMENSION * COLLISION_GRID_DIMENSION },
+  function () { return []; }
+);
+const colliderQueryScratch = [];
+let colliderGridReady = false;
+let colliderQueryToken = 0;
 
 const playerStart = {
   x: 0,
@@ -628,8 +649,72 @@ function verticalRangesOverlap(feetY, bodyHeight, box) {
   return bodyBottom < box.maxY - 0.015 && bodyTop > box.minY + 0.015;
 }
 
-function collidesAt(x, z, radius, feetY, bodyHeight) {
+function collisionGridCoordinate(value) {
+  return THREE.MathUtils.clamp(
+    Math.floor((value - COLLISION_GRID_ORIGIN) / COLLISION_GRID_CELL_SIZE),
+    0,
+    COLLISION_GRID_DIMENSION - 1
+  );
+}
+
+function invalidateColliderSpatialGrid() {
+  colliderGridReady = false;
+}
+
+function rebuildColliderSpatialGrid() {
+  for (const cell of colliderSpatialGrid) cell.length = 0;
+
   for (const box of colliders) {
+    const minCellX = collisionGridCoordinate(box.minX);
+    const maxCellX = collisionGridCoordinate(box.maxX);
+    const minCellZ = collisionGridCoordinate(box.minZ);
+    const maxCellZ = collisionGridCoordinate(box.maxZ);
+
+    for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+      for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+        colliderSpatialGrid[
+          cellZ * COLLISION_GRID_DIMENSION + cellX
+        ].push(box);
+      }
+    }
+  }
+
+  colliderGridReady = true;
+}
+
+function nearbyColliders(x, z, radius) {
+  if (!colliderGridReady) return colliders;
+
+  colliderQueryScratch.length = 0;
+  colliderQueryToken++;
+  if (colliderQueryToken >= 2147483640) {
+    colliderQueryToken = 1;
+    for (const box of colliders) box.collisionQueryToken = 0;
+  }
+
+  const minCellX = collisionGridCoordinate(x - radius);
+  const maxCellX = collisionGridCoordinate(x + radius);
+  const minCellZ = collisionGridCoordinate(z - radius);
+  const maxCellZ = collisionGridCoordinate(z + radius);
+
+  for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+      const cell = colliderSpatialGrid[
+        cellZ * COLLISION_GRID_DIMENSION + cellX
+      ];
+      for (const box of cell) {
+        if (box.collisionQueryToken === colliderQueryToken) continue;
+        box.collisionQueryToken = colliderQueryToken;
+        colliderQueryScratch.push(box);
+      }
+    }
+  }
+
+  return colliderQueryScratch;
+}
+
+function collidesAt(x, z, radius, feetY, bodyHeight) {
+  for (const box of nearbyColliders(x, z, radius)) {
     if (
       verticalRangesOverlap(feetY, bodyHeight, box) &&
       circleIntersectsBox(x, z, radius, box)
@@ -642,7 +727,7 @@ function collidesAt(x, z, radius, feetY, bodyHeight) {
 
 function pointInsideWorldCollider(point, inset) {
   inset = inset || 0;
-  for (const box of colliders) {
+  for (const box of nearbyColliders(point.x, point.z, Math.max(0.02, inset))) {
     if (
       point.x > box.minX + inset && point.x < box.maxX - inset &&
       point.y > box.minY + inset && point.y < box.maxY - inset &&
@@ -662,7 +747,7 @@ function resolveCirclePenetration(position, radius, bodyHeight) {
   for (let pass = 0; pass < 10; pass++) {
     let changedThisPass = false;
 
-    for (const box of colliders) {
+    for (const box of nearbyColliders(position.x, position.z, radius)) {
       if (!verticalRangesOverlap(position.y, bodyHeight, box)) continue;
 
       const nearestX = Math.max(box.minX, Math.min(position.x, box.maxX));
@@ -788,6 +873,7 @@ function addBox(x, y, z, width, height, depth, material, options) {
       minZ: z - depth / 2,
       maxZ: z + depth / 2
     });
+    invalidateColliderSpatialGrid();
   }
 
   if (options.platform) {
@@ -818,6 +904,7 @@ function addInvisibleCollider(x, y, z, width, height, depth) {
     minZ: z - depth / 2,
     maxZ: z + depth / 2
   });
+  invalidateColliderSpatialGrid();
 }
 
 function addFloor() {

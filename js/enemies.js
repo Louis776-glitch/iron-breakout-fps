@@ -42,6 +42,7 @@ const enemyShotOrigin = new THREE.Vector3();
 const enemySightOrigin = new THREE.Vector3();
 const enemyShotTarget = new THREE.Vector3();
 const enemyShotDirection = new THREE.Vector3();
+const enemyRayHits = [];
 
 function getDifficultyStats() {
   if (selectedMode === "无尽") {
@@ -409,9 +410,9 @@ function createEnemy() {
   enemy.muzzleFlash.visible = false;
   enemy.group.add(enemy.muzzleFlash);
 
-  enemy.muzzleLight = new THREE.PointLight(0xff982f, 0, 3.5, 2);
-  enemy.muzzleLight.position.copy(enemy.muzzleFlash.position);
-  enemy.group.add(enemy.muzzleLight);
+  // 枪口闪光网格已经能清晰表达开火。敌人死亡/复活时反复增删点光源
+  // 会改变场景灯光数量并触发全场景材质重编译，因此不再创建动态灯光。
+  enemy.muzzleLight = { intensity: 0 };
 
   scene.add(enemy.group);
   enemies.push(enemy);
@@ -488,8 +489,9 @@ function enemyRayPathIsClear(origin, target) {
   enemyRaycaster.near = 0.015;
   enemyRaycaster.far = Math.max(0.02, sightDistance - 0.035);
 
-  const blockers = enemyRaycaster.intersectObjects(raycastWorld, false);
-  return blockers.length === 0;
+  enemyRayHits.length = 0;
+  enemyRaycaster.intersectObjects(raycastWorld, false, enemyRayHits);
+  return enemyRayHits.length === 0;
 }
 
 function enemyCanSeePlayer(enemy, distanceToPlayer) {
@@ -561,10 +563,11 @@ function enemyShoot(enemy, distanceToPlayer) {
   enemyRaycaster.set(enemyShotOrigin, enemyShotDirection);
   enemyRaycaster.near = 0.08;
   enemyRaycaster.far = enemy.shootRange;
-  const misses = enemyRaycaster.intersectObjects(raycastWorld, false);
+  enemyRayHits.length = 0;
+  enemyRaycaster.intersectObjects(raycastWorld, false, enemyRayHits);
 
-  if (misses.length > 0) {
-    const hit = misses[0];
+  if (enemyRayHits.length > 0) {
+    const hit = enemyRayHits[0];
     const normal = hit.face
       ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
       : new THREE.Vector3(0, 1, 0);

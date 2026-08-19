@@ -3,73 +3,136 @@
 // -----------------------------------------------------------------------
 // 射击、命中特效和击杀结算
 // -----------------------------------------------------------------------
-const sparkGeometry = new THREE.SphereGeometry(0.035, 6, 4);
+const IMPACT_PARTICLE_COUNT = 8;
+const IMPACT_EFFECT_POOL_SIZE = 20;
+
+// 命中特效使用固定对象池：开枪时不再临时创建 8 个网格、材质和点光源。
+// 动态增删点光源会让大量 MeshStandardMaterial 重新编译着色器，是原先
+// “子弹刚命中就卡一下”的主要原因之一。
+function initializeImpactEffectPool() {
+  for (let poolIndex = 0; poolIndex < IMPACT_EFFECT_POOL_SIZE; poolIndex++) {
+    const positions = new Float32Array(IMPACT_PARTICLE_COUNT * 3);
+    const velocities = new Float32Array(IMPACT_PARTICLE_COUNT * 3);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
+    );
+    const material = new THREE.PointsMaterial({
+      color: 0xffc24a,
+      size: 0.105,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const points = new THREE.Points(geometry, material);
+    points.visible = false;
+    points.frustumCulled = false;
+    scene.add(points);
+
+    effects.push({
+      active: false,
+      points: points,
+      geometry: geometry,
+      material: material,
+      positions: positions,
+      velocities: velocities,
+      age: 0,
+      lifetime: 0.34
+    });
+  }
+}
 
 function spawnImpact(position, normal, hitEnemy) {
-  const color = hitEnemy ? 0xff4a24 : 0xffc24a;
-  const group = new THREE.Group();
-  group.position.copy(position).addScaledVector(normal, 0.025);
-  scene.add(group);
-
-  const material = new THREE.MeshBasicMaterial({
-    color: color,
-    transparent: true,
-    opacity: 1,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  });
-
-  const particles = [];
-  for (let i = 0; i < 8; i++) {
-    const spark = new THREE.Mesh(sparkGeometry, material);
-    const direction = new THREE.Vector3(
-      THREE.MathUtils.randFloatSpread(1),
-      Math.random() * 0.85,
-      THREE.MathUtils.randFloatSpread(1)
-    ).normalize();
-    direction.addScaledVector(normal, 1.4).normalize();
-    spark.userData.velocity = direction.multiplyScalar(
-      THREE.MathUtils.randFloat(1.8, 5)
-    );
-    group.add(spark);
-    particles.push(spark);
+  let effect = null;
+  for (const candidate of effects) {
+    if (!candidate.active) {
+      effect = candidate;
+      break;
+    }
   }
 
-  const light = new THREE.PointLight(color, 6, 3.5, 2);
-  group.add(light);
+  // 极端连续爆炸超过池容量时复用最老特效，避免任何运行时分配。
+  if (!effect) {
+    effect = effects[0];
+    for (const candidate of effects) {
+      if (candidate.age > effect.age) effect = candidate;
+    }
+  }
 
-  effects.push({
-    group: group,
-    material: material,
-    particles: particles,
-    light: light,
-    age: 0,
-    lifetime: 0.34
-  });
+  effect.active = true;
+  effect.age = 0;
+  effect.material.color.setHex(hitEnemy ? 0xff4a24 : 0xffc24a);
+  effect.material.opacity = 1;
+  effect.material.size = hitEnemy ? 0.12 : 0.105;
+  effect.points.position.copy(position).addScaledVector(normal, 0.025);
+  effect.points.visible = true;
+  effect.positions.fill(0);
+
+  for (let i = 0; i < IMPACT_PARTICLE_COUNT; i++) {
+    const offset = i * 3;
+    let directionX = THREE.MathUtils.randFloatSpread(1) + normal.x * 1.4;
+    let directionY = Math.random() * 0.85 + normal.y * 1.4;
+    let directionZ = THREE.MathUtils.randFloatSpread(1) + normal.z * 1.4;
+    const inverseLength = 1 / Math.max(
+      0.0001,
+      Math.hypot(directionX, directionY, directionZ)
+    );
+    const speed = THREE.MathUtils.randFloat(1.8, 5);
+    directionX *= inverseLength * speed;
+    directionY *= inverseLength * speed;
+    directionZ *= inverseLength * speed;
+    effect.velocities[offset] = directionX;
+    effect.velocities[offset + 1] = directionY;
+    effect.velocities[offset + 2] = directionZ;
+  }
+
+  effect.geometry.attributes.position.needsUpdate = true;
+}
+
+function clearImpactEffects() {
+  for (const effect of effects) {
+    effect.active = false;
+    effect.points.visible = false;
+    effect.material.opacity = 0;
+  }
+}
+
+function setImpactEffectsCompileVisible(visible) {
+  // 只需预编译一个 PointsMaterial；其余池成员使用相同着色器程序。
+  if (effects.length <= 0 || effects[0].active) return;
+  effects[0].points.visible = visible;
+  effects[0].material.opacity = 0;
 }
 
 function updateEffects(delta) {
-  for (let i = effects.length - 1; i >= 0; i--) {
-    const effect = effects[i];
+  for (const effect of effects) {
+    if (!effect.active) continue;
     effect.age += delta;
-    const life = 1 - effect.age / effect.lifetime;
+    const life = Math.max(0, 1 - effect.age / effect.lifetime);
 
-    for (const particle of effect.particles) {
-      particle.position.addScaledVector(particle.userData.velocity, delta);
-      particle.userData.velocity.y -= 8 * delta;
-      particle.scale.setScalar(Math.max(0.01, life));
+    for (let i = 0; i < IMPACT_PARTICLE_COUNT; i++) {
+      const offset = i * 3;
+      effect.positions[offset] += effect.velocities[offset] * delta;
+      effect.positions[offset + 1] += effect.velocities[offset + 1] * delta;
+      effect.positions[offset + 2] += effect.velocities[offset + 2] * delta;
+      effect.velocities[offset + 1] -= 8 * delta;
     }
 
-    effect.material.opacity = Math.max(0, life);
-    effect.light.intensity = Math.max(0, life * 6);
+    effect.geometry.attributes.position.needsUpdate = true;
+    effect.material.opacity = life;
 
     if (effect.age >= effect.lifetime) {
-      scene.remove(effect.group);
-      effect.material.dispose();
-      effects.splice(i, 1);
+      effect.active = false;
+      effect.points.visible = false;
+      effect.material.opacity = 0;
     }
   }
 }
+
+initializeImpactEffectPool();
 
 function findEnemyFromObject(object) {
   let current = object;
@@ -85,11 +148,25 @@ function findEnemyFromObject(object) {
 const projectileRaycaster = new THREE.Raycaster();
 const projectileDirection = new THREE.Vector3();
 const projectileStep = new THREE.Vector3();
+const projectileTargets = [];
+const projectileHits = [];
+const playerShotEnemyTargets = [];
+const playerShotWorldHits = [];
+const playerShotEnemyHits = [];
+const playerAimPoint = new THREE.Vector2(0, 0);
+const shotWorldNormal = new THREE.Vector3();
 const projectileMetalMaterial = new THREE.MeshStandardMaterial({
   color: 0xc9d3d8, roughness: 0.28, metalness: 0.82
 });
 const rocketBodyMaterial = new THREE.MeshStandardMaterial({
   color: 0x4c6550, roughness: 0.58, metalness: 0.38
+});
+const rocketFlameMaterial = new THREE.MeshBasicMaterial({
+  color: 0xff7a24,
+  transparent: true,
+  opacity: 0.92,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
 });
 
 function damageEnemy(enemy, amount) {
@@ -118,8 +195,13 @@ function createPlayerProjectile(kind, profile) {
   nose.rotation.x = -Math.PI / 2;
   nose.position.z = -0.45;
   group.add(nose);
-  const flame = new THREE.PointLight(0xff7a24, 4.5, 3.2, 2);
+  // 使用自发光几何体代替运行时增删 PointLight，避免着色器重新编译。
+  const flame = new THREE.Mesh(
+    new THREE.SphereGeometry(0.13, 7, 5),
+    rocketFlameMaterial
+  );
   flame.position.z = 0.38;
+  flame.scale.z = 1.8;
   group.add(flame);
 
   group.quaternion.copy(camera.quaternion);
@@ -187,18 +269,26 @@ function updatePlayerProjectiles(delta) {
     projectileRaycaster.near = 0;
     projectileRaycaster.far = travelDistance + 0.08;
 
-    const targets = raycastWorld.slice();
+    projectileTargets.length = 0;
+    projectileTargets.push.apply(projectileTargets, raycastWorld);
     for (const enemy of enemies) {
-      if (enemy.alive) targets.push.apply(targets, enemy.hitMeshes);
+      if (enemy.alive) {
+        projectileTargets.push.apply(projectileTargets, enemy.hitMeshes);
+      }
     }
-    const hits = projectileRaycaster.intersectObjects(targets, false);
+    projectileHits.length = 0;
+    projectileRaycaster.intersectObjects(
+      projectileTargets,
+      false,
+      projectileHits
+    );
 
-    if (hits.length > 0) {
-      const hit = hits[0];
+    if (projectileHits.length > 0) {
+      const hit = projectileHits[0];
       const enemy = findEnemyFromObject(hit.object);
       const normal = hit.face
-        ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
-        : new THREE.Vector3(0, 1, 0);
+        ? shotWorldNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld)
+        : shotWorldNormal.set(0, 1, 0);
 
       if (projectile.kind === "rocket") {
         explodeRocket(hit.point, projectile.damage);
@@ -269,21 +359,37 @@ function shoot() {
     return;
   }
 
-  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  raycaster.setFromCamera(playerAimPoint, camera);
   raycaster.far = profile.range;
-  const targets = raycastWorld.slice();
+  playerShotWorldHits.length = 0;
+  raycaster.intersectObjects(raycastWorld, false, playerShotWorldHits);
+
+  playerShotEnemyTargets.length = 0;
   for (const enemy of enemies) {
-    if (enemy.alive) targets.push.apply(targets, enemy.hitMeshes);
+    if (enemy.alive) {
+      playerShotEnemyTargets.push.apply(playerShotEnemyTargets, enemy.hitMeshes);
+    }
   }
+  playerShotEnemyHits.length = 0;
+  raycaster.intersectObjects(
+    playerShotEnemyTargets,
+    false,
+    playerShotEnemyHits
+  );
 
-  const intersections = raycaster.intersectObjects(targets, false);
-  if (intersections.length === 0) return;
+  const worldHit = playerShotWorldHits[0] || null;
+  const enemyHit = playerShotEnemyHits[0] || null;
+  const hit = !worldHit
+    ? enemyHit
+    : !enemyHit
+      ? worldHit
+      : enemyHit.distance < worldHit.distance ? enemyHit : worldHit;
+  if (!hit) return;
 
-  const hit = intersections[0];
   const enemy = findEnemyFromObject(hit.object);
   const worldNormal = hit.face
-    ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
-    : new THREE.Vector3(0, 1, 0);
+    ? shotWorldNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld)
+    : shotWorldNormal.set(0, 1, 0);
 
   spawnImpact(hit.point, worldNormal, Boolean(enemy && enemy.alive));
 
@@ -386,7 +492,7 @@ function getSupportHeight(x, z, oldY, newY) {
 function findCeilingHeight(x, z, oldTop, newTop) {
   let ceiling = Infinity;
 
-  for (const box of colliders) {
+  for (const box of nearbyColliders(x, z, player.radius * 0.8)) {
     if (
       box.minY >= oldTop - 0.04 &&
       box.minY <= newTop + 0.02 &&
@@ -452,7 +558,7 @@ function updatePlayer(delta) {
       0,
       -Math.sin(player.yaw)
     );
-    const movement = new THREE.Vector3()
+    const movement = tempVector3.set(0, 0, 0)
       .addScaledVector(forward, inputZ)
       .addScaledVector(right, inputX)
       .normalize();

@@ -9,11 +9,7 @@ function clearEnemiesAndEffects() {
   }
   enemies.length = 0;
 
-  for (const effect of effects) {
-    scene.remove(effect.group);
-    effect.material.dispose();
-  }
-  effects.length = 0;
+  clearImpactEffects();
   respawnTimers.length = 0;
 
   for (const projectile of playerProjectiles) {
@@ -23,6 +19,17 @@ function clearEnemiesAndEffects() {
     scene.remove(projectile.group);
   }
   playerProjectiles.length = 0;
+}
+
+// 新地图第一次绘制会编译材质和生成阴影贴图。把这项工作放在取得鼠标
+// 控制之前完成，避免玩家刚开始转动视角时遇到集中编译造成的长帧。
+function warmUpBattleRenderer() {
+  setImpactEffectsCompileVisible(true);
+  renderer.shadowMap.needsUpdate = true;
+  renderer.compile(scene, camera);
+  renderer.render(scene, camera);
+  setImpactEffectsCompileVisible(false);
+  shadowRefreshTimer = 0.1;
 }
 
 function resetPlayer() {
@@ -94,6 +101,7 @@ function startGame(mode) {
   pauseScreen.classList.add("hidden");
   resultScreen.classList.add("hidden");
   updateGameInfo();
+  warmUpBattleRenderer();
 
   renderer.domElement.requestPointerLock();
 }
@@ -111,6 +119,7 @@ function startCurrentLevel() {
   resultScreen.classList.add("hidden");
   pauseScreen.classList.add("hidden");
   updateGameInfo();
+  warmUpBattleRenderer();
   renderer.domElement.requestPointerLock();
 }
 
@@ -221,10 +230,15 @@ function updateGameInfo() {
 // -----------------------------------------------------------------------
 // 鼠标锁定与键盘输入
 // -----------------------------------------------------------------------
+let pointerLockMouseGuard = 0;
+
 function onPointerLockChange() {
   const locked = document.pointerLockElement === renderer.domElement;
 
   if (locked) {
+    // 浏览器刚切换指针锁定时偶尔会送来包含旧光标位移的事件；丢弃前两个
+    // 高频事件可避免入场瞬间视角突跳，持续时间通常不到几毫秒。
+    pointerLockMouseGuard = 2;
     pauseScreen.classList.add("hidden");
   } else {
     firing = false;
@@ -282,9 +296,16 @@ document.addEventListener("mousemove", function (event) {
     return;
   }
 
+  if (pointerLockMouseGuard > 0) {
+    pointerLockMouseGuard--;
+    return;
+  }
+
   const sensitivity = aiming ? 0.00072 : 0.00215;
-  player.yaw -= event.movementX * sensitivity;
-  player.pitch -= event.movementY * sensitivity;
+  const movementX = THREE.MathUtils.clamp(event.movementX, -120, 120);
+  const movementY = THREE.MathUtils.clamp(event.movementY, -120, 120);
+  player.yaw -= movementX * sensitivity;
+  player.pitch -= movementY * sensitivity;
   player.pitch = THREE.MathUtils.clamp(
     player.pitch,
     -Math.PI / 2 + 0.04,
@@ -378,6 +399,12 @@ function animate() {
   updateEffects(delta);
   updateVisualUI(delta);
   updateMinimap(delta);
+
+  shadowRefreshTimer -= delta;
+  if (shadowRefreshTimer <= 0) {
+    renderer.shadowMap.needsUpdate = true;
+    shadowRefreshTimer = 0.1;
+  }
   renderer.render(scene, camera);
 }
 

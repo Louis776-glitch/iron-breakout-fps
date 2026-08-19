@@ -1,7 +1,7 @@
 {
   "name": "iron-breakout-fps-desktop",
   "productName": "钢铁突围",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Three.js 废墟工业风第一人称射击游戏桌面版",
   "main": "desktop/main.cjs",
   "author": "Louis776-glitch",

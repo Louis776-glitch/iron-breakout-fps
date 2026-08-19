@@ -1153,6 +1153,7 @@ function clearMap() {
   scene.add(mapRoot);
 
   colliders.length = 0;
+  invalidateColliderSpatialGrid();
   platforms.length = 0;
   ladderZones.length = 0;
   raycastWorld.length = 0;
@@ -1177,9 +1178,11 @@ function loadCurrentMap() {
   // 先计算一次一层连通区域，狙击塔会从这些可达地面点附近选址；建塔后
   // 再重算一次导航，保证塔柱和梯脚也进入最终碰撞与寻路数据。
   mapRoot.updateMatrixWorld(true);
+  rebuildColliderSpatialGrid();
   filterSpawnPointsByReachability();
   addSniperTowersForCurrentMap();
   mapRoot.updateMatrixWorld(true);
+  rebuildColliderSpatialGrid();
   filterSpawnPointsByReachability();
 
   // 立即刷新建筑矩阵，保证首帧碰撞射线和敌人视线检测使用新地图坐标。
