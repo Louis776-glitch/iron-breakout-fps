@@ -37,6 +37,19 @@
 
 下载仓库后直接双击 `index.html`，或使用任意静态文件服务器打开。首次加载需要联网获取 Three.js CDN 脚本。
 
+## 下载 Windows 桌面版
+
+[前往 GitHub Releases 下载最新版](https://github.com/Louis776-glitch/iron-breakout-fps/releases/latest)
+
+下载名称包含 `Windows-x64` 的 ZIP 压缩包，完整解压后双击 `钢铁突围.exe` 即可运行。游戏仍通过 CDN 获取 Three.js，因此启动时需要联网。当前公开版本未购买代码签名证书，Windows 首次运行时可能显示安全提示。
+
+开发者也可以在安装 Node.js 后运行以下命令构建桌面版：
+
+```bash
+npm install
+npm run package:win
+```
+
 ## 项目结构
 
 ```text

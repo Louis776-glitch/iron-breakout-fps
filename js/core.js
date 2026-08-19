@@ -807,6 +807,19 @@ function addBox(x, y, z, width, height, depth, material, options) {
   return mesh;
 }
 
+// 只参与角色碰撞、不创建可见网格，也不会加入子弹射线目标。
+// 适合在地图边缘补充高空空气墙，而不遮挡视野或产生枪击火花。
+function addInvisibleCollider(x, y, z, width, height, depth) {
+  colliders.push({
+    minX: x - width / 2,
+    maxX: x + width / 2,
+    minY: y - height / 2,
+    maxY: y + height / 2,
+    minZ: z - depth / 2,
+    maxZ: z + depth / 2
+  });
+}
+
 function addFloor() {
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE),
@@ -1378,6 +1391,50 @@ function addOpenReturnTunnel(cx, cz, length, width, orientation, coreSign, color
   addMapLight(cx, height - 0.35, cz, color, 3.8, 9);
 }
 
+// 外围环廊实体墙只有约 3 米高，玩家从 8.25 米狙击塔起跳时可以越过
+// 墙顶并落入环廊与地图边界之间的不可达夹层。空气墙从实体墙顶继续向上，
+// 同时覆盖四角仓室的外侧墙；其底部高于敌人身体，因此不改变一层 AI 导航。
+function addOuterIndustrialAirWalls() {
+  const bottomY = 2.9;
+  const topY = 13.5;
+  const height = topY - bottomY;
+  const centerY = (bottomY + topY) / 2;
+  const tunnelOuterEdge = 45.8;
+  const tunnelLength = 78;
+  const thickness = 0.44;
+
+  // 四条外围货运走廊的外墙上沿。
+  addInvisibleCollider(0, centerY, -tunnelOuterEdge, tunnelLength, height, thickness);
+  addInvisibleCollider(0, centerY, tunnelOuterEdge, tunnelLength, height, thickness);
+  addInvisibleCollider(-tunnelOuterEdge, centerY, 0, thickness, height, tunnelLength);
+  addInvisibleCollider(tunnelOuterEdge, centerY, 0, thickness, height, tunnelLength);
+
+  // 四角仓室填补环廊空气墙在转角处留下的空隙，形成完整封闭外沿。
+  const roomCenter = 43;
+  const roomOuterEdge = 50;
+  const roomSpan = 14.4;
+  for (const signX of [-1, 1]) {
+    for (const signZ of [-1, 1]) {
+      addInvisibleCollider(
+        signX * roomOuterEdge,
+        centerY,
+        signZ * roomCenter,
+        thickness,
+        height,
+        roomSpan
+      );
+      addInvisibleCollider(
+        signX * roomCenter,
+        centerY,
+        signZ * roomOuterEdge,
+        roomSpan,
+        height,
+        thickness
+      );
+    }
+  }
+}
+
 // 所有地图共享的外围工业扩展区。它把旧战区与四角仓室、环形货运暗道
 // 和外围装卸平台连成一体；这里的建筑仍通过 addBox 等基础函数创建，
 // 因而会自动拥有玩家碰撞、敌人避障和子弹命中特效。
@@ -1412,6 +1469,9 @@ function addOuterIndustrialRing() {
   addRoom(43, 43, 14, 14, {
     doors: ["西", "北"], roof: true, height: 3.8, lightColor: 0xffc36d
   });
+
+  // 阻止玩家从狙击塔越过外围墙进入与回廊不连通的地图夹层。
+  addOuterIndustrialAirWalls();
 
   // 外围高低差、装卸台和低矮掩体让扩展区域也有纵深。
   // 装卸台位于只有 5.6 米宽的外围回廊内。缩短台面宽度并减小进深，
