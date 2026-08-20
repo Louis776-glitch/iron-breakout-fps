@@ -49,6 +49,8 @@ const tempVector3 = new THREE.Vector3();
 const loadingScreen = document.getElementById("loadingScreen");
 const modeScreen = document.getElementById("modeScreen");
 const endlessMapScreen = document.getElementById("endlessMapScreen");
+const armoryScreen = document.getElementById("armoryScreen");
+const teamLobbyScreen = document.getElementById("teamLobbyScreen");
 const pauseScreen = document.getElementById("pauseScreen");
 const resultScreen = document.getElementById("resultScreen");
 const resultTitle = document.getElementById("resultTitle");
@@ -67,12 +69,39 @@ const weaponText = document.getElementById("weaponText");
 const ammoText = document.getElementById("ammoText");
 const objective = document.getElementById("objective");
 const climbHint = document.getElementById("climbHint");
+const interactionPrompt = document.getElementById("interactionPrompt");
 const crosshair = document.getElementById("crosshair");
 const hitMarker = document.getElementById("hitMarker");
 const damageVignette = document.getElementById("damageVignette");
 const pickupNotice = document.getElementById("pickupNotice");
 const reloadIndicator = document.getElementById("reloadIndicator");
 const scopeOverlay = document.getElementById("scopeOverlay");
+const armoryCanvas = document.getElementById("armoryCanvas");
+const armoryWeaponList = document.getElementById("armoryWeaponList");
+const armoryWeaponClass = document.getElementById("armoryWeaponClass");
+const armoryWeaponName = document.getElementById("armoryWeaponName");
+const armoryWeaponDescription = document.getElementById("armoryWeaponDescription");
+const armoryDamage = document.getElementById("armoryDamage");
+const armoryRange = document.getElementById("armoryRange");
+const armoryMagazine = document.getElementById("armoryMagazine");
+const armoryReserve = document.getElementById("armoryReserve");
+const armoryMechanic = document.getElementById("armoryMechanic");
+const teamScoreboard = document.getElementById("teamScoreboard");
+const teamRedScoreText = document.getElementById("teamRedScore");
+const teamBlueScoreText = document.getElementById("teamBlueScore");
+const teamRespawnOverlay = document.getElementById("teamRespawnOverlay");
+const teamRespawnSecondsText = document.getElementById("teamRespawnSeconds");
+const teamPlayerNameInput = document.getElementById("teamPlayerName");
+const teamSideSelect = document.getElementById("teamSideSelect");
+const teamMapSelect = document.getElementById("teamMapSelect");
+const teamDifficultySelect = document.getElementById("teamDifficultySelect");
+const teamServerUrlInput = document.getElementById("teamServerUrl");
+const teamRoomPasswordInput = document.getElementById("teamRoomPassword");
+const teamRoomCodeInput = document.getElementById("teamRoomCodeInput");
+const teamRoomCodeText = document.getElementById("teamRoomCodeText");
+const teamConnectionStatus = document.getElementById("teamConnectionStatus");
+const teamRoomPlayers = document.getElementById("teamRoomPlayers");
+const teamHostStartButton = document.getElementById("teamHostStartButton");
 const minimapCanvas = document.getElementById("minimap");
 const minimapContext = minimapCanvas.getContext("2d");
 const minimapStaticCanvas = document.createElement("canvas");
@@ -275,7 +304,9 @@ function rebuildMinimapStatic() {
 function updateMinimap(delta) {
   minimapUpdateTimer -= delta;
   if (minimapUpdateTimer > 0) return;
-  minimapUpdateTimer = 0.04;
+  // 团队战需要同时维护 10 名成员，小地图使用 12.5Hz
+  // 已足够连续，不必为每帧额外刷新 Canvas。
+  minimapUpdateTimer = selectedMode === "团队" ? 0.08 : 0.04;
 
   const context = minimapContext;
   context.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
@@ -309,17 +340,24 @@ function updateMinimap(delta) {
     context.restore();
   }
 
-  // 红点始终显示存活敌人，方便玩家在大型室内地图中规划路线。
-  context.fillStyle = "#ff4b43";
-  context.shadowColor = "rgba(255, 55, 45, 0.8)";
+  // 普通模式显示全部敌人；团队模式严格只显示己方成员，对方五名成员
+  // 即使正在开火也不会出现在战术地图上。
+  const teamMinimap = selectedMode === "团队";
+  context.fillStyle = teamMinimap && teamLocalTeam === "蓝"
+    ? "#45baff"
+    : "#ff4b43";
+  context.shadowColor = teamMinimap && teamLocalTeam === "蓝"
+    ? "rgba(45, 166, 255, 0.85)"
+    : "rgba(255, 55, 45, 0.8)";
   context.shadowBlur = 7;
   for (const enemy of enemies) {
     if (!enemy.alive) continue;
+    if (teamMinimap && enemy.team !== teamLocalTeam) continue;
     context.beginPath();
     context.arc(
       worldToMinimapX(enemy.group.position.x),
       worldToMinimapY(enemy.group.position.z),
-      5.5,
+      enemy.isHuman ? 6.8 : 5.5,
       0,
       Math.PI * 2
     );
@@ -359,7 +397,7 @@ function updateMinimap(delta) {
 }
 
 // 无尽模式选图界面的俯视缩略图。缩略图直接用 Canvas 绘制，
-// 与五张地图各自的路线拓扑对应，不依赖外部图片资源。
+// 与十张地图各自的路线拓扑对应，不依赖外部图片资源。
 function drawEndlessMapPreviews() {
   document.querySelectorAll(".endless-map-preview").forEach(function (canvas) {
     const context = canvas.getContext("2d");
@@ -490,7 +528,7 @@ function drawEndlessMapPreviews() {
       rect(-31, -37, 19, 12, "#423a34", "#ca9568");
       rect(31, 37, 19, 12, "#423a34", "#ca9568");
       label("双环", 0, 0, "#c8f5ff");
-    } else {
+    } else if (index === 4) {
       // 地图五：交替开口的长墙迫使路线连续折返，边仓提供额外环路。
       for (let row = 0; row < 5; row++) {
         const z = -32 + row * 16;
@@ -504,6 +542,84 @@ function drawEndlessMapPreviews() {
       rect(35, 25, 18, 11, "#344850", "#78aebc");
       line([[-18, 7], [18, 7]], "#63cce9", 8);
       label("折返", 0, 22, "#d9f5ff");
+    } else if (index === 5) {
+      // 地图六：十字形主干把中央机修仓与四座边缘工房直接连通。
+      rect(0, 0, 22, 20, "#37484e", "#acc2c9");
+      rect(0, -35, 24, 16, "#3e4e53", "#a4bbc2");
+      rect(0, 35, 24, 16, "#3e4e53", "#a4bbc2");
+      rect(-37, 0, 18, 24, "#453d37", "#c18b61");
+      rect(37, 0, 18, 24, "#453d37", "#c18b61");
+      rect(-34, -32, 15, 13, "#2c4149", "#75a8b8");
+      rect(34, 31, 15, 13, "#2c4149", "#75a8b8");
+      line([[0, -27], [0, 27]], "#e2a64d", 9);
+      line([[-28, 0], [28, 0]], "#e2a64d", 9);
+      line([[-17, -8], [17, -8]], "#63cce9", 7);
+      label("机修", 0, 0, "#ffe0a0");
+    } else if (index === 6) {
+      // 地图七：主路线连续左右折转，形成明显的锯齿形管廊。
+      line([
+        [-44, 37], [-22, 37], [-22, 20], [20, 20], [20, 3],
+        [-18, 3], [-18, -15], [24, -15], [24, -34], [45, -34]
+      ], "#526167", 13);
+      line([
+        [-44, 37], [-22, 37], [-22, 20], [20, 20], [20, 3],
+        [-18, 3], [-18, -15], [24, -15], [24, -34], [45, -34]
+      ], "#d29a50", 3);
+      rect(-39, -31, 17, 18, "#304650", "#76aabd");
+      rect(39, 30, 17, 18, "#304650", "#76aabd");
+      rect(-38, 5, 15, 15, "#443b35", "#c28c60");
+      rect(38, -3, 15, 15, "#443b35", "#c28c60");
+      line([[-8, 28], [8, 28]], "#63cce9", 7);
+      label("管线", 1, 3, "#ffe0a0");
+    } else if (index === 7) {
+      // 地图八：核心铸造间向北、西南、东南分成三条战斗支线。
+      rect(0, 2, 24, 22, "#443b35", "#d19a68");
+      line([[0, -9], [0, -39]], "#687d84", 14);
+      line([[-9, 9], [-35, 34]], "#687d84", 14);
+      line([[9, 9], [35, 34]], "#687d84", 14);
+      rect(0, -39, 25, 15, "#30464e", "#88bac8");
+      rect(-38, 35, 20, 16, "#30464e", "#88bac8");
+      rect(38, 35, 20, 16, "#30464e", "#88bac8");
+      line([[-38, 35], [0, 44], [38, 35]], "#e2a64d", 5);
+      line([[-16, 1], [16, 1]], "#63cce9", 7);
+      label("铸造", 0, 2, "#ffd0a8");
+    } else if (index === 8) {
+      // 地图九：内外两层矩形回廊围绕能源核心，四向门洞贯通环线。
+      rect(0, 0, 82, 70, "#34454b", "#a4bec7");
+      rect(0, 0, 66, 54, "#071015", "#718d97");
+      rect(0, 0, 48, 38, "#3f4f54", "#a8bfc6");
+      rect(0, 0, 31, 22, "#071015", "#718d97");
+      rect(0, 0, 17, 12, "#164754", "#5fc2dc");
+      rect(0, -27, 8, 16, "rgba(226, 166, 77, 0.67)");
+      rect(0, 27, 8, 16, "rgba(226, 166, 77, 0.67)");
+      rect(-33, 0, 16, 8, "rgba(226, 166, 77, 0.67)");
+      rect(33, 0, 16, 8, "rgba(226, 166, 77, 0.67)");
+      line([[-15, -15], [15, -15]], "#63cce9", 7);
+      label("能源", 0, 0, "#c8f5ff");
+    } else if (index === 9) {
+      // 地图十：九个仓储模块按三乘三排列，中央装卸区负责分流。
+      for (let row = 0; row < 3; row++) {
+        for (let column = 0; column < 3; column++) {
+          const x = -30 + column * 30;
+          const z = -30 + row * 30;
+          const center = row === 1 && column === 1;
+          rect(
+            x,
+            z,
+            center ? 22 : 19,
+            center ? 20 : 18,
+            center ? "#164754" : "#3b484d",
+            center ? "#63cce9" : "#9db2b9"
+          );
+        }
+      }
+      line([[-30, 0], [30, 0]], "#d29a50", 6);
+      line([[0, -30], [0, 30]], "#d29a50", 6);
+      rect(-15, -15, 6, 6, "rgba(226, 166, 77, 0.7)");
+      rect(15, -15, 6, 6, "rgba(226, 166, 77, 0.7)");
+      rect(-15, 15, 6, 6, "rgba(226, 166, 77, 0.7)");
+      rect(15, 15, 6, 6, "rgba(226, 166, 77, 0.7)");
+      label("装卸", 0, 0, "#c8f5ff");
     }
 
     // 白色三角表示各地图的玩家起始方向。
@@ -512,9 +628,14 @@ function drawEndlessMapPreviews() {
       [0, 47, 0],
       [-45, 43, -Math.PI * 0.25],
       [0, 47, 0],
+      [0, 47, 0],
+      [0, 31, 0],
+      [-45, 46, -Math.PI * 0.75],
+      [0, 47, 0],
+      [0, 47, 0],
       [0, 47, 0]
     ];
-    const start = starts[index];
+    const start = starts[index] || [0, 47, 0];
     context.save();
     context.translate(mapX(start[0]), mapY(start[1]));
     context.rotate(start[2]);
@@ -2343,7 +2464,47 @@ function decorateCurrentMap() {
       ],
       furniture: [[-35, -24, "横", 0x73955d], [35, 24, "横", 0xb36d48]]
     },
-    "第一关：旧机修仓": {
+    "锯齿管线站": {
+      art: [
+        [-16, 2, -31.68, 4.8, 2, "横", "管线巡检", "蓝", 1],
+        [16, 2, -11.68, 4.8, 2, "横", "压力正常", "绿", 1],
+        [-30, 2, 8.32, 4.8, 2, "横", "关闭阀门", "橙", 1],
+        [15, 2, 28.32, 4.8, 2, "横", "检修通道", "紫", 1],
+        [37.72, 2, 18, 4.2, 1.9, "纵", "管网中枢", "蓝", -1]
+      ],
+      furniture: [[-36, -41, "横", 0x518ba8], [36, 18, "纵", 0xaa6c47]]
+    },
+    "三叉铸造枢纽": {
+      art: [
+        [0, 2.15, -30.72, 5.2, 2.1, "横", "铸造一线", "橙", 1],
+        [-27.72, 2, 27, 4.5, 2, "纵", "冷却流程", "蓝", 1],
+        [27.72, 2, 27, 4.5, 2, "纵", "高温区域", "橙", -1],
+        [-12.22, 2, 3, 4.2, 1.9, "纵", "三线汇流", "绿", -1],
+        [12.22, 2, 3, 4.2, 1.9, "纵", "当心吊装", "紫", 1]
+      ],
+      furniture: [[-38, 27, "横", 0x538aa3], [38, 27, "横", 0xb56b42]]
+    },
+    "回字能源堡": {
+      art: [
+        [-20, 2.1, -38.22, 5, 2.1, "横", "外环防线", "蓝", 1],
+        [20, 2.1, 38.22, 5, 2.1, "横", "能源循环", "绿", -1],
+        [-19.22, 2, -8, 4.4, 2, "纵", "内环机组", "紫", 1],
+        [19.22, 2, 8, 4.4, 2, "纵", "核心稳定", "橙", -1],
+        [0, 2, 19.22, 4.6, 2, "横", "双环联锁", "蓝", -1]
+      ],
+      furniture: [[-28, -28, "横", 0x548da7], [28, 28, "纵", 0xad6c43]]
+    },
+    "九宫仓储区": {
+      art: [
+        [-30, 2, -21.72, 4.2, 1.9, "横", "一号仓位", "绿", 1],
+        [0, 2, -21.72, 4.2, 1.9, "横", "先进先出", "蓝", 1],
+        [30, 2, -21.72, 4.2, 1.9, "横", "装卸安全", "橙", 1],
+        [-21.72, 2, 30, 4.2, 1.9, "纵", "货物编码", "紫", 1],
+        [21.72, 2, 30, 4.2, 1.9, "纵", "保持通道", "绿", -1]
+      ],
+      furniture: [[-30, 0, "纵", 0x659361], [30, 0, "纵", 0xb76c45]]
+    },
+    "十字机修仓": {
       art: [
         [-12, 2, -7.72, 3.8, 1.9, "横", "机修之家", "橙", 1],
         [-25, 2, -28.22, 4.2, 1.9, "横", "精心检修", "蓝", 1],

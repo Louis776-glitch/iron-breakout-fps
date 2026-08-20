@@ -39,8 +39,20 @@
       <div>弹匣 / 备弹：<span id="ammoText">45 / 180</span></div>
     </div>
 
+    <div id="teamScoreboard" class="hidden">
+      <span class="team-score-red">红方 <b id="teamRedScore">0</b></span>
+      <em>先到 100</em>
+      <span class="team-score-blue">蓝方 <b id="teamBlueScore">0</b></span>
+    </div>
+
+    <div id="teamRespawnOverlay" class="hidden">
+      <strong>等待增援</strong>
+      <span><b id="teamRespawnSeconds">15</b> 秒后复活</span>
+    </div>
+
     <div id="objective">请选择游戏模式</div>
     <div id="climbHint">靠近梯子：按 W 或空格向上攀爬，按 S 向下</div>
+    <div id="interactionPrompt">按 F 拾取武器</div>
     <div id="pickupNotice">已拾取物资</div>
     <div id="reloadIndicator">正在换弹</div>
 
@@ -74,32 +86,183 @@
       <h1 class="main-title">钢铁<span>突围</span></h1>
       <div class="menu-subtitle-row">选择作战协议，进入废弃工业战区</div>
 
-      <div class="mode-grid">
-        <button id="endlessModeButton" class="mode-button mode-card">
-          <i class="mode-card-number">01</i>
-          <span class="mode-card-tag">无限增援 · 动态威胁</span>
-          <strong>无尽模式</strong>
-          <span>敌人会不断复活。累计分数越高，敌人生命、速度、伤害和同时出现数量都会提升。</span>
-        </button>
+      <div class="menu-actions-layout">
+        <div class="mode-grid">
+          <button id="endlessModeButton" class="mode-button mode-card">
+            <i class="mode-card-number">01</i>
+            <span class="mode-card-tag">无限增援 · 动态威胁</span>
+            <strong>无尽模式</strong>
+            <span>敌人会不断复活。累计分数越高，敌人生命、速度、伤害和同时出现数量都会提升。</span>
+          </button>
 
-        <button id="levelModeButton" class="mode-button mode-card">
-          <i class="mode-card-number">02</i>
-          <span class="mode-card-tag">五区战役 · 逐级肃清</span>
-          <strong>关卡模式</strong>
-          <span>连续挑战五张不同地图。每关共有二十五名敌人，全部消灭即可进入下一关。</span>
+          <button id="levelModeButton" class="mode-button mode-card">
+            <i class="mode-card-number">02</i>
+            <span class="mode-card-tag">五区战役 · 逐级肃清</span>
+            <strong>关卡模式</strong>
+            <span>连续挑战五关，每关从十种线路拓扑中随机抽取且同一轮不重复；每关消灭二十五名敌人。</span>
+          </button>
+
+          <button id="teamModeButton" class="mode-button mode-card team-mode-card">
+            <i class="mode-card-number">03</i>
+            <span class="mode-card-tag">红蓝对抗 · 双人联机</span>
+            <strong>团队模式</strong>
+            <span>红蓝双方各五名成员，支持单人带队或两名真人同队、对阵；率先取得一百次击杀的一方获胜。</span>
+          </button>
+        </div>
+
+        <button id="armoryButton" class="armory-terminal-button">
+          <span class="arsenal-icon" aria-hidden="true">
+            <i class="arsenal-icon-body"></i>
+            <i class="arsenal-icon-barrel"></i>
+            <i class="arsenal-icon-stock"></i>
+            <i class="arsenal-icon-magazine"></i>
+          </span>
+          <span class="arsenal-button-copy">
+            <small>ARSENAL // 11</small>
+            <strong>武器库</strong>
+            <em>装备参数与三维陈列</em>
+          </span>
+          <span class="arsenal-enter">›</span>
         </button>
       </div>
 
       <div class="menu-status-strip">
-        <span>● 五座无尽战区</span>
-        <span>● 五个战役关卡</span>
-        <span>● 动态补给与敌情</span>
+        <span>● 十座无尽战区</span>
+        <span>● 十图随机五关战役</span>
+        <span>● 5V5 团队联机</span>
+        <span>● 十一种可拾取武器</span>
       </div>
 
       <div class="controls">
         <b>W A S D</b> 移动　·　<b>鼠标</b> 瞄准<br>
-        <b>左键</b> 射击　·　<b>按住 Q</b> 狙击瞄准　·　<b>R</b> 换弹<br>
+        <b>左键</b> 射击　·　<b>按住右键</b> 狙击瞄准　·　<b>R</b> 换弹<br>
+        <b>F</b> 拾取并更换地面武器<br>
         <b>空格</b> 跳跃或攀爬　·　<b>Shift</b> 奔跑　·　<b>Esc</b> 暂停
+      </div>
+    </div>
+  </div>
+
+  <div id="teamLobbyScreen" class="screen hidden">
+    <div class="panel team-lobby-panel">
+      <div class="team-lobby-header">
+        <div>
+          <div class="menu-kicker">TEAM LINK // 双人战术链路</div>
+          <h1 class="team-lobby-title">团队作战 5V5</h1>
+          <p>房主选择地图和人机难度；另一名玩家可加入同一阵营或选择敌方阵营。</p>
+        </div>
+        <button id="backFromTeamButton" class="action-button">返回主菜单</button>
+      </div>
+
+      <div class="team-lobby-grid">
+        <section class="team-config-card">
+          <span class="team-card-index">01 / 作战配置</span>
+          <label>
+            玩家昵称
+            <input id="teamPlayerName" maxlength="12" value="玩家" autocomplete="off">
+          </label>
+          <label>
+            选择阵营
+            <select id="teamSideSelect">
+              <option value="蓝">蓝方</option>
+              <option value="红">红方</option>
+            </select>
+          </label>
+          <label>
+            作战地图
+            <select id="teamMapSelect">
+              <option value="0">废弃联合厂区</option>
+              <option value="1">地下转运站</option>
+              <option value="2">坍塌钢铁厂</option>
+              <option value="3">双环冷却厂</option>
+              <option value="4">蛇形后勤堡垒</option>
+              <option value="5">十字机修仓</option>
+              <option value="6">锯齿管线站</option>
+              <option value="7">三叉铸造枢纽</option>
+              <option value="8">回字能源堡</option>
+              <option value="9">九宫仓储区</option>
+            </select>
+          </label>
+          <label>
+            人机难度
+            <select id="teamDifficultySelect">
+              <option value="简单">简单</option>
+              <option value="适中" selected>适中</option>
+              <option value="困难">困难</option>
+            </select>
+          </label>
+          <button id="teamOfflineStartButton" class="team-primary-button">单人开始 5V5</button>
+          <small>单人模式：1 名玩家 + 4 名友方人机，对抗 5 名敌方人机。</small>
+        </section>
+
+        <section class="team-config-card team-online-card">
+          <span class="team-card-index">02 / 联机房间</span>
+          <label>
+            房间服务器
+            <input id="teamServerUrl" value="ws://127.0.0.1:8787" autocomplete="off" spellcheck="false">
+          </label>
+          <label>
+            房间密码（可留空）
+            <input id="teamRoomPassword" maxlength="16" type="password" autocomplete="off">
+          </label>
+          <div class="team-online-actions">
+            <button id="teamCreateRoomButton" class="team-secondary-button">创建房间</button>
+            <input id="teamRoomCodeInput" maxlength="6" placeholder="输入六位房间码" autocomplete="off">
+            <button id="teamJoinRoomButton" class="team-secondary-button">加入房间</button>
+          </div>
+
+          <div class="team-room-terminal">
+            <div>房间码：<strong id="teamRoomCodeText">------</strong></div>
+            <div>状态：<span id="teamConnectionStatus">尚未连接</span></div>
+            <div id="teamRoomPlayers" class="team-room-players">等待创建或加入房间</div>
+          </div>
+          <button id="teamHostStartButton" class="team-primary-button hidden">房主开始比赛</button>
+          <small>异地联机需要填写已部署的 WSS 公网服务器地址；本机测试使用默认地址。</small>
+        </section>
+      </div>
+
+      <div class="team-rules-strip">
+        <span>每次阵亡 15 秒后复活</span>
+        <span>复活后 3 秒无敌</span>
+        <span>友方伤害关闭</span>
+        <span>率先 100 击杀获胜</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="armoryScreen" class="screen hidden">
+    <div class="panel armory-panel">
+      <div class="armory-header">
+        <div>
+          <div class="menu-kicker">ARSENAL // 装备数据终端</div>
+          <h1 class="armory-title">战术武器库</h1>
+          <p>选择武器查看实战参数；拖动模型可环绕观察，松开后自动旋转。</p>
+        </div>
+        <button id="backFromArmoryButton" class="action-button">返回主菜单</button>
+      </div>
+
+      <div class="armory-layout">
+        <div id="armoryWeaponList" class="armory-weapon-list" aria-label="武器列表"></div>
+
+        <div class="armory-showcase">
+          <div class="armory-canvas-frame">
+            <canvas id="armoryCanvas"></canvas>
+            <div class="armory-drag-hint">按住鼠标拖动 · 360° 环绕展示</div>
+          </div>
+          <div class="armory-model-label">程序化几何模型 / 无外部资源</div>
+        </div>
+
+        <div class="armory-stats">
+          <span id="armoryWeaponClass" class="armory-class">突击武器</span>
+          <h2 id="armoryWeaponName">机枪</h2>
+          <p id="armoryWeaponDescription" class="armory-description"></p>
+          <div class="armory-stat-grid">
+            <div><small>伤害</small><strong id="armoryDamage">24</strong></div>
+            <div><small>射程</small><strong id="armoryRange">160 米</strong></div>
+            <div><small>弹匣</small><strong id="armoryMagazine">45</strong></div>
+            <div><small>备弹</small><strong id="armoryReserve">180</strong></div>
+          </div>
+          <div id="armoryMechanic" class="armory-mechanic"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -108,14 +271,18 @@
     <div class="panel">
       <h2>游戏已暂停</h2>
       <p class="subtitle">鼠标控制已释放</p>
-      <div class="prompt">点击任意位置继续战斗</div>
+      <div class="pause-actions">
+        <button id="pauseResumeButton" class="action-button">继续战斗</button>
+        <button id="pauseReturnMenuButton" class="action-button pause-danger-button">返回主菜单</button>
+      </div>
+      <div class="prompt">也可点击面板外的暗色区域继续战斗</div>
     </div>
   </div>
 
   <div id="endlessMapScreen" class="screen hidden">
     <div class="panel">
       <h1 class="title">选择无尽地图</h1>
-      <p class="subtitle">五座工业战区均支持无尽复活与动态难度</p>
+      <p class="subtitle">十座工业战区均支持无尽复活与动态难度</p>
 
       <div class="map-grid">
         <button class="mode-button endless-map-button" data-map-index="0">
@@ -148,6 +315,36 @@
           <span class="map-layout-label">交替折返迷宫</span>
           <span>多道长墙交替开口，组成连续蛇形路线；侧仓、维修室与二层捷径提供迂回选择。</span>
         </button>
+        <button class="mode-button endless-map-button" data-map-index="5">
+          <strong>十字机修仓</strong>
+          <canvas class="endless-map-preview" data-preview-index="5" width="560" height="300"></canvas>
+          <span class="map-layout-label">十字枢纽工区</span>
+          <span>中央机修间向四面展开，横纵主通道串联边缘工房、高架与狙击塔。</span>
+        </button>
+        <button class="mode-button endless-map-button" data-map-index="6">
+          <strong>锯齿管线站</strong>
+          <canvas class="endless-map-preview" data-preview-index="6" width="560" height="300"></canvas>
+          <span class="map-layout-label">锯齿折线管廊</span>
+          <span>连续转折的管线通道贯穿厂区，沿线分布泵房、检修仓和多层捷径。</span>
+        </button>
+        <button class="mode-button endless-map-button" data-map-index="7">
+          <strong>三叉铸造枢纽</strong>
+          <canvas class="endless-map-preview" data-preview-index="7" width="560" height="300"></canvas>
+          <span class="map-layout-label">三向铸造分流</span>
+          <span>核心铸造室连接三条战斗分支，侧翼之间还能通过外围通道快速转移。</span>
+        </button>
+        <button class="mode-button endless-map-button" data-map-index="8">
+          <strong>回字能源堡</strong>
+          <canvas class="endless-map-preview" data-preview-index="8" width="560" height="300"></canvas>
+          <span class="map-layout-label">内外双层回环</span>
+          <span>能源核心被两层环形回廊包围，四向门洞和高架连接提供多条包抄路线。</span>
+        </button>
+        <button class="mode-button endless-map-button" data-map-index="9">
+          <strong>九宫仓储区</strong>
+          <canvas class="endless-map-preview" data-preview-index="9" width="560" height="300"></canvas>
+          <span class="map-layout-label">九宫模块仓群</span>
+          <span>九座功能仓分区排列，门洞朝向彼此错开，中央装卸区能够通往各个象限。</span>
+        </button>
       </div>
 
       <button id="backFromMapButton" class="action-button">返回模式选择</button>
@@ -171,6 +368,7 @@
   <script src="js/weapons.js"></script>
   <script src="js/enemies.js"></script>
   <script src="js/combat.js"></script>
+  <script src="js/team.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

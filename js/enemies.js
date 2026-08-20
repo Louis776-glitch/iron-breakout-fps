@@ -62,18 +62,22 @@ function getDifficultyStats() {
     };
   }
 
+  // 新五关把旧版第一至第三关的难度区间等分为五档。这样第五关的
+  // 每项数值都与旧版第三关完全相同，同时每次过关仍会稳定变难。
+  const oldStageEquivalent = 1 + (currentLevel - 1) * 0.5;
+  const progress = oldStageEquivalent - 1;
   return {
     tier: currentLevel,
-    health: 90 + (currentLevel - 1) * 24,
-    speed: 1.75 + (currentLevel - 1) * 0.27,
-    damage: 10 + (currentLevel - 1) * 2.7,
-    shotDamage: 5 + (currentLevel - 1) * 1.15,
-    fireInterval: Math.max(0.68, 1.55 - (currentLevel - 1) * 0.17),
-    accuracy: 0.43 + (currentLevel - 1) * 0.075,
-    shootRange: 22 + (currentLevel - 1) * 2.5,
-    detection: 16 + (currentLevel - 1) * 2,
-    maxActive: 8 + currentLevel,
-    respawnDelay: Math.max(0.55, 1.35 - currentLevel * 0.12)
+    health: 90 + progress * 24,
+    speed: 1.75 + progress * 0.27,
+    damage: 10 + progress * 2.7,
+    shotDamage: 5 + progress * 1.15,
+    fireInterval: Math.max(0.68, 1.55 - progress * 0.17),
+    accuracy: 0.43 + progress * 0.075,
+    shootRange: 22 + progress * 2.5,
+    detection: 16 + progress * 2,
+    maxActive: Math.round(8 + oldStageEquivalent),
+    respawnDelay: Math.max(0.55, 1.35 - oldStageEquivalent * 0.12)
   };
 }
 
@@ -138,6 +142,31 @@ function nearestReachableNavigationIndex(point) {
   return -1;
 }
 
+// 寻路是 5V5 中最容易出现“偶尔卡一帧”的 CPU 操作。旧实现
+// 每次都分配两个整地图 Int32Array，还会为每个搜索格子创建
+// 一个四元素邻居数组。多名 AI 同时换路时会触发明显的垃圾回收峰值。
+// 下面三块缓冲区只在地图网格变大时扩容，每次搜索使用代数
+// 标记区分访问记录，不再 fill 整张地图或分配短命对象。
+let navigationSearchPrevious = new Int32Array(0);
+let navigationSearchQueue = new Int32Array(0);
+let navigationSearchVisited = new Uint32Array(0);
+let navigationSearchGeneration = 0;
+
+function prepareNavigationSearch(total) {
+  if (navigationSearchPrevious.length < total) {
+    navigationSearchPrevious = new Int32Array(total);
+    navigationSearchQueue = new Int32Array(total);
+    navigationSearchVisited = new Uint32Array(total);
+    navigationSearchGeneration = 0;
+  }
+  navigationSearchGeneration++;
+  if (navigationSearchGeneration >= 0xffffffff) {
+    navigationSearchVisited.fill(0);
+    navigationSearchGeneration = 1;
+  }
+  return navigationSearchGeneration;
+}
+
 function buildGroundPatrolPath(start, destination) {
   if (!groundNavigation) return [destination.clone()];
   const navigation = groundNavigation;
@@ -147,38 +176,44 @@ function buildGroundPatrolPath(start, destination) {
   const destinationIndex = nearestReachableNavigationIndex(destination);
   if (startIndex < 0 || destinationIndex < 0) return [destination.clone()];
 
-  const previous = new Int32Array(total);
-  previous.fill(-1);
-  const queue = new Int32Array(total);
+  const generation = prepareNavigationSearch(total);
+  const previous = navigationSearchPrevious;
+  const queue = navigationSearchQueue;
+  const visited = navigationSearchVisited;
   let queueHead = 0;
   let queueTail = 0;
   queue[queueTail++] = startIndex;
   previous[startIndex] = startIndex;
+  visited[startIndex] = generation;
 
-  while (queueHead < queueTail && previous[destinationIndex] < 0) {
+  while (queueHead < queueTail && visited[destinationIndex] !== generation) {
     const index = queue[queueHead++];
     const x = index % side;
     const z = Math.floor(index / side);
-    const neighbors = [index - 1, index + 1, index - side, index + side];
 
     for (let direction = 0; direction < 4; direction++) {
       if (direction === 0 && x <= 0) continue;
       if (direction === 1 && x >= side - 1) continue;
       if (direction === 2 && z <= 0) continue;
       if (direction === 3 && z >= side - 1) continue;
-      const nextIndex = neighbors[direction];
+      let nextIndex;
+      if (direction === 0) nextIndex = index - 1;
+      else if (direction === 1) nextIndex = index + 1;
+      else if (direction === 2) nextIndex = index - side;
+      else nextIndex = index + side;
       if (
         !navigation.reachable[nextIndex] ||
-        previous[nextIndex] >= 0
+        visited[nextIndex] === generation
       ) {
         continue;
       }
       previous[nextIndex] = index;
+      visited[nextIndex] = generation;
       queue[queueTail++] = nextIndex;
     }
   }
 
-  if (previous[destinationIndex] < 0) return [destination.clone()];
+  if (visited[destinationIndex] !== generation) return [destination.clone()];
 
   const cellPath = [];
   let cursor = destinationIndex;
@@ -342,6 +377,8 @@ function createEnemy() {
     pursuitTimer: 0,
     pursuitCooldown: THREE.MathUtils.randFloat(0.4, 2.8),
     wasPursuing: false,
+    slowTimer: 0,
+    slowFactor: 1,
     walkPhase: Math.random() * Math.PI * 2
   };
 
@@ -625,6 +662,8 @@ function updateEnemyAI(delta) {
     }
 
     enemy.shotCooldown -= delta;
+    enemy.slowTimer = Math.max(0, enemy.slowTimer - delta);
+    if (enemy.slowTimer <= 0) enemy.slowFactor = 1;
     enemy.pursuitTimer = Math.max(0, enemy.pursuitTimer - delta);
     enemy.pursuitCooldown = Math.max(0, enemy.pursuitCooldown - delta);
     enemy.visionTimer -= delta;
@@ -693,11 +732,12 @@ function updateEnemyAI(delta) {
         tempVector.copy(enemy.avoidDirection);
       }
 
-      const speed = enemy.isTowerGuard
+      const baseSpeed = enemy.isTowerGuard
         ? (canShoot ? 0 : enemy.speed * 0.34)
         : chasing
           ? (canShoot && distanceToPlayer < 14 ? enemy.speed * 0.14 : enemy.speed)
           : enemy.speed * 0.58;
+      const speed = baseSpeed * (enemy.slowTimer > 0 ? enemy.slowFactor : 1);
       const step = speed * delta;
 
       const moved = step <= 0.0001
