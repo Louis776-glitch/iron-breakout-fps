@@ -4,3 +4,8 @@
 # 常见系统文件
 Thumbs.db
 .DS_Store
+
+# Electron 桌面版依赖与打包产物
+node_modules/
+out/
+dist/

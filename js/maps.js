@@ -1,7 +1,7 @@
 "use strict";
 
 // -----------------------------------------------------------------------
-// 五张独立无尽地图与五张关卡地图
+// 十张可供无尽模式和关卡模式共同使用的独立线路拓扑
 // -----------------------------------------------------------------------
 function buildLegacyEndlessMap() {
   currentMapName = "废弃联合厂区";
@@ -660,7 +660,8 @@ function buildEndlessMapFive() {
 }
 
 function buildLevelOne() {
-  currentMapName = "第一关：旧机修仓";
+  // 原关卡模式使用的基础线路正式命名，今后作为十图池中的独立拓扑。
+  currentMapName = "十字机修仓";
   scene.background.set(0x182129);
   scene.fog.color.set(0x182129);
   scene.fog.near = 27;
@@ -1055,21 +1056,355 @@ function buildLevelFive() {
   addCommonSpawns();
 }
 
+// -----------------------------------------------------------------------
+// 新拓扑七：交替缺口形成多次折返的锯齿管线站
+// -----------------------------------------------------------------------
+function buildZigzagPipelineMap() {
+  currentMapName = "锯齿管线站";
+  scene.background.set(0x142027);
+  scene.fog.color.set(0x142027);
+  scene.fog.near = 28;
+  scene.fog.far = 122;
+  sun.color.set(0xd4edf2);
+  sun.intensity = 1.84;
+  hemisphere.intensity = 1.1;
+
+  addFloor();
+  addBoundary();
+  setPlayerStart(-45, 46, -Math.PI * 0.75, 0);
+
+  // 四道管线隔墙的缺口不断左右换位，构成锯齿形主路线；每个缺口
+  // 都保留十米宽度，敌人导航与玩家奔跑不会被转角卡住。
+  function addBarrierWithGap(z, gapX) {
+    const halfGap = 5;
+    const leftWidth = gapX - halfGap + 48;
+    const rightWidth = 48 - gapX - halfGap;
+    if (leftWidth > 0.5) {
+      addBox(-48 + leftWidth / 2, 1.72, z, leftWidth, 3.44, 0.62, bunkerMaterial);
+    }
+    if (rightWidth > 0.5) {
+      addBox(gapX + halfGap + rightWidth / 2, 1.72, z, rightWidth, 3.44, 0.62, wallMaterial);
+    }
+    addDoorFrame(gapX, z, "横", 5.2, 2.7);
+  }
+
+  addBarrierWithGap(-32, -30);
+  addBarrierWithGap(-12, 28);
+  addBarrierWithGap(8, -16);
+  addBarrierWithGap(28, 31);
+
+  addRoom(-38, -41, 17, 10, {
+    doors: ["南", "东"], roof: true, height: 3.7,
+    lightColor: 0x67a8c5, doorWidth: 3.2
+  });
+  addRoom(38, -22, 17, 13, {
+    doors: ["北", "西"], roof: false, height: 3.8, doorWidth: 3.2
+  });
+  addRoom(-36, -2, 20, 13, {
+    doors: ["南", "东"], roof: true, height: 3.8,
+    lightColor: 0xd28a4d, doorWidth: 3.2
+  });
+  addRoom(37, 18, 18, 13, {
+    doors: ["北", "西"], roof: true, height: 3.8,
+    lightColor: 0x6b9eb8, doorWidth: 3.2
+  });
+  addRoom(-36, 39, 20, 12, {
+    doors: ["北", "东"], roof: false, height: 3.7, doorWidth: 3.2
+  });
+
+  // L 形二层检修线跨过中部两条折返巷道，设置两部独立梯子。
+  addCatwalkSegment(0, -2, 31, "横", 3.5);
+  addCatwalkSegment(15.5, 7, 18, "纵", 3.5);
+  addPlatform(15.5, -2, 5, 5, 3.5);
+  addLadder(-15.7, -0.25, 3.5, 0, -1, "横");
+  addLadder(18.35, 15.5, 3.5, -1, 0, "纵");
+
+  addSunkenWorkBay(8, 39, 12, 8);
+  addLoadingDock(-40, 18, 9, 6, "东");
+  addBrokenWall(10, -41, 14, "横");
+  addRubbleCover(-20, -22, "纵");
+  addRubbleCover(21, 18, "横");
+
+  for (const point of [
+    [-45, -24], [-18, -41], [19, -40], [44, -3],
+    [-44, 17], [-8, 18], [8, 40], [44, 41],
+    [11, -21], [-25, -2], [24, 39]
+  ]) {
+    addCrate(point[0], point[1], 2.2, 2, 2.2);
+  }
+
+  for (const light of [
+    [-28, 3, -42, 0x68a9c7], [28, 3, -22, 0xd18b4e],
+    [-28, 3, -2, 0x68a9c7], [28, 3, 18, 0xd18b4e],
+    [-24, 3, 40, 0x68a9c7]
+  ]) {
+    addMapLight(light[0], light[1], light[2], light[3], 4.6, 14);
+  }
+  addCommonSpawns(false);
+}
+
+// -----------------------------------------------------------------------
+// 新拓扑八：中央枢纽向三座铸造翼延伸的三叉路线
+// -----------------------------------------------------------------------
+function buildTridentFoundryMap() {
+  currentMapName = "三叉铸造枢纽";
+  scene.background.set(0x211913);
+  scene.fog.color.set(0x211913);
+  scene.fog.near = 27;
+  scene.fog.far = 121;
+  sun.color.set(0xffcf9b);
+  sun.intensity = 1.86;
+  hemisphere.intensity = 1.08;
+
+  addFloor();
+  addBoundary();
+  setPlayerStart(0, 47, Math.PI, 0);
+
+  addRoom(0, 3, 24, 22, {
+    doors: ["北", "南", "东", "西"], roof: false,
+    height: 4.3, doorWidth: 4
+  });
+  addRoom(0, -39, 28, 16, {
+    doors: ["南", "东", "西"], roof: true, height: 4,
+    lightColor: 0xff9047, doorWidth: 3.5
+  });
+  addRoom(-38, 27, 20, 22, {
+    doors: ["北", "东"], roof: true, height: 4,
+    lightColor: 0x6f9fb8, doorWidth: 3.5
+  });
+  addRoom(38, 27, 20, 22, {
+    doors: ["北", "西"], roof: true, height: 4,
+    lightColor: 0xd48848, doorWidth: 3.5
+  });
+
+  // 北、 southwest、southeast 三条生产翼汇入中央大厅；南侧保留
+  // 开阔装卸场，形成三叉而非十字对称布局。
+  addTunnel(0, -20.5, 21, 5.2, "纵", 0xe08e48);
+  addBentCorridor([[-12, 3], [-20, 3], [-20, 27], [-28, 27]], 5, 0x6797b4);
+  addBentCorridor([[12, 3], [20, 3], [20, 27], [28, 27]], 5, 0xd58b4c);
+  addDoorFrame(0, -10, "横", 4.2, 2.7);
+  addDoorFrame(-12, 3, "纵", 4.2, 2.7);
+  addDoorFrame(12, 3, "纵", 4.2, 2.7);
+
+  addFurnaceStack(-7, -38, 0xff693b);
+  addFurnaceStack(8, -38, 0xff9b48);
+  addSunkenWorkBay(0, 3, 13, 10);
+  addLoadingDock(-18, 42, 11, 7, "北");
+  addLoadingDock(19, 42, 11, 7, "北");
+
+  // 二层观察线从中央延伸向两个侧翼，两个端点均有梯子。
+  addCatwalkSegment(0, 1, 31, "横", 3.55);
+  addCatwalkSegment(-15.5, 12, 22, "纵", 3.55);
+  addPlatform(-15.5, 1, 5, 5, 3.55);
+  addLadder(15.7, 2.75, 3.55, 0, -1, "横");
+  addLadder(-18.35, 22, 3.55, 1, 0, "纵");
+
+  addBrokenWall(-31, -11, 14, "纵");
+  addBrokenWall(31, -11, 14, "纵");
+  addRubbleCover(-23, 11, "横");
+  addRubbleCover(24, 12, "横");
+  for (const point of [
+    [-44, -43], [-25, -42], [25, -43], [44, -23],
+    [-44, 6], [44, 5], [-13, 34], [13, 34],
+    [-29, 44], [30, 44], [-5, 19], [7, 20]
+  ]) {
+    addCrate(point[0], point[1], 2.25, 2, 2.25);
+  }
+
+  addMapLight(0, 3.3, 3, 0xffa052, 6.2, 18);
+  addMapLight(0, 3.1, -25, 0xff7540, 5, 15);
+  addMapLight(-28, 3.1, 25, 0x6e9eb9, 4.6, 14);
+  addMapLight(28, 3.1, 25, 0xd58a4b, 4.6, 14);
+  addCommonSpawns(false);
+}
+
+// -----------------------------------------------------------------------
+// 新拓扑九：外环、内环与中央能源井组成同心回字路线
+// -----------------------------------------------------------------------
+function buildConcentricEnergyMap() {
+  currentMapName = "回字能源堡";
+  scene.background.set(0x111d22);
+  scene.fog.color.set(0x111d22);
+  scene.fog.near = 29;
+  scene.fog.far = 124;
+  sun.color.set(0xbfe8ee);
+  sun.intensity = 1.84;
+  hemisphere.intensity = 1.12;
+
+  addFloor();
+  addBoundary();
+  setPlayerStart(0, 47, Math.PI, 0);
+
+  // 两个四向开门的完整方环形成三层同心路线：外围、环间以及内核。
+  addRoom(0, 0, 76, 76, {
+    doors: ["北", "南", "东", "西"], roof: false,
+    height: 4.25, doorWidth: 5
+  });
+  addRoom(0, 0, 38, 38, {
+    doors: ["北", "南", "东", "西"], roof: false,
+    height: 4.1, doorWidth: 4.2
+  });
+
+  for (const room of [
+    [-28, -28, ["南", "东"]], [28, -28, ["南", "西"]],
+    [-28, 28, ["北", "东"]], [28, 28, ["北", "西"]]
+  ]) {
+    addRoom(room[0], room[1], 13, 12, {
+      doors: room[2], roof: true, height: 3.7,
+      lightColor: room[0] < 0 ? 0x61a7c2 : 0xd48f4e,
+      doorWidth: 3
+    });
+  }
+
+  addSunkenWorkBay(0, 0, 14, 14);
+  addDoorFrame(0, -38, "横", 5.2, 2.75);
+  addDoorFrame(0, 38, "横", 5.2, 2.75);
+  addDoorFrame(-38, 0, "纵", 5.2, 2.75);
+  addDoorFrame(38, 0, "纵", 5.2, 2.75);
+
+  // 内环上方的 U 形检修回廊提供多方向射击角度。
+  addCatwalkSegment(0, -18.5, 31, "横", 3.45);
+  addCatwalkSegment(-15.5, -4, 29, "纵", 3.45);
+  addCatwalkSegment(15.5, -4, 29, "纵", 3.45);
+  addPlatform(-15.5, -18.5, 5, 5, 3.45);
+  addPlatform(15.5, -18.5, 5, 5, 3.45);
+  addLadder(-18.35, 9, 3.45, 1, 0, "纵");
+  addLadder(18.35, 9, 3.45, -1, 0, "纵");
+
+  addLoadingDock(-44, -22, 8, 7, "东");
+  addLoadingDock(44, 22, 8, 7, "西");
+  addBrokenWall(-18, 43, 14, "横");
+  addBrokenWall(18, -43, 14, "横");
+  addRubbleCover(-9, 27, "纵");
+  addRubbleCover(10, -27, "纵");
+  for (const point of [
+    [-46, -45], [0, -45], [46, -45], [-45, 16],
+    [45, -16], [-46, 45], [0, 45], [46, 45],
+    [-9, -9], [9, -9], [-9, 9], [9, 9]
+  ]) {
+    addCrate(point[0], point[1], 2.15, 1.95, 2.15);
+  }
+
+  addMapLight(0, 3.2, 0, 0x61d3e0, 6, 18);
+  addMapLight(-28, 3, 0, 0x68a8c1, 4.6, 14);
+  addMapLight(28, 3, 0, 0xd79751, 4.6, 14);
+  addMapLight(0, 3, -28, 0x68a8c1, 4.6, 14);
+  addMapLight(0, 3, 28, 0xd79751, 4.6, 14);
+  addCommonSpawns(false);
+}
+
+// -----------------------------------------------------------------------
+// 新拓扑十：八座仓房围绕中央路口形成九宫格街巷
+// -----------------------------------------------------------------------
+function buildGridWarehouseMap() {
+  currentMapName = "九宫仓储区";
+  scene.background.set(0x1d211c);
+  scene.fog.color.set(0x1d211c);
+  scene.fog.near = 28;
+  scene.fog.far = 122;
+  sun.color.set(0xe9dfb8);
+  sun.intensity = 1.83;
+  hemisphere.intensity = 1.1;
+
+  addFloor();
+  addBoundary();
+  setPlayerStart(0, 47, Math.PI, 0);
+
+  // 八座独立仓房占据九宫格外围单元，中央单元保持开阔。横纵街道
+  // 宽度均超过十二米，形成棋盘式多路线交叉战场。
+  const warehouseCells = [
+    [-30, -30], [0, -30], [30, -30],
+    [-30, 0], [30, 0],
+    [-30, 30], [0, 30], [30, 30]
+  ];
+  for (let index = 0; index < warehouseCells.length; index++) {
+    const cell = warehouseCells[index];
+    addRoom(cell[0], cell[1], 16, 16, {
+      doors: ["北", "南", "东", "西"],
+      roof: index % 3 !== 1,
+      height: 3.8 + (index % 2) * 0.2,
+      lightColor: index % 2 === 0 ? 0x6d9eaf : 0xd49652,
+      doorWidth: 3.2
+    });
+  }
+
+  addSunkenWorkBay(0, 0, 12, 12);
+  addLoadingDock(-15, -15, 9, 6, "南");
+  addLoadingDock(15, 15, 9, 6, "北");
+  addBrokenWall(0, -19, 12, "横");
+  addBrokenWall(0, 19, 12, "横");
+  addRubbleCover(-17, 0, "纵");
+  addRubbleCover(17, 0, "纵");
+
+  // 中央十字天桥俯瞰四条主街，两端梯子提供相反方向的登高入口。
+  addCatwalkSegment(0, -2.5, 28, "横", 3.5);
+  addCatwalkSegment(5, 7, 19, "纵", 3.5);
+  addPlatform(5, -2.5, 5, 5, 3.5);
+  addLadder(-14.2, -0.75, 3.5, 0, -1, "横");
+  addLadder(7.85, 16, 3.5, -1, 0, "纵");
+
+  for (const point of [
+    [-46, -15], [-15, -46], [15, -46], [46, -15],
+    [-46, 15], [-15, 46], [15, 46], [46, 15],
+    [-15, -2], [15, 2], [-2, -15], [2, 15]
+  ]) {
+    addCrate(point[0], point[1], 2.2, 2, 2.2);
+  }
+
+  for (const light of [
+    [-15, 3.1, -15, 0x6da3b7], [15, 3.1, -15, 0xd49652],
+    [-15, 3.1, 15, 0xd49652], [15, 3.1, 15, 0x6da3b7],
+    [0, 3.3, 0, 0xe6bc72]
+  ]) {
+    addMapLight(light[0], light[1], light[2], light[3], 4.8, 14);
+  }
+  addCommonSpawns(false);
+}
+
 const endlessMapBuilders = [
   buildEndlessMap,
   buildEndlessMapTwo,
   buildEndlessMapThree,
   buildEndlessMapFour,
-  buildEndlessMapFive
+  buildEndlessMapFive,
+  buildLevelOne,
+  buildZigzagPipelineMap,
+  buildTridentFoundryMap,
+  buildConcentricEnergyMap,
+  buildGridWarehouseMap
 ];
 
-const levelMapBuilders = [
+// 关卡模式的正式十图池。旧的二至五关固定地图生成函数仍保留在源码中
+// 作为历史布局参考，但不再参与抽图，因此玩家实际可遇到的拓扑严格为十种。
+const campaignMapBuilders = [
+  buildEndlessMap,
+  buildEndlessMapTwo,
+  buildEndlessMapThree,
+  buildEndlessMapFour,
+  buildEndlessMapFive,
   buildLevelOne,
-  buildLevelTwo,
-  buildLevelThree,
-  buildLevelFour,
-  buildLevelFive
+  buildZigzagPipelineMap,
+  buildTridentFoundryMap,
+  buildConcentricEnergyMap,
+  buildGridWarehouseMap
 ];
+
+const campaignMapOrder = [];
+
+function prepareCampaignMapOrder() {
+  campaignMapOrder.length = 0;
+  for (let index = 0; index < campaignMapBuilders.length; index++) {
+    campaignMapOrder.push(index);
+  }
+
+  // Fisher-Yates 洗牌后取前五张，每轮战役五关不会重复地图。
+  for (let index = campaignMapOrder.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const temporary = campaignMapOrder[index];
+    campaignMapOrder[index] = campaignMapOrder[swapIndex];
+    campaignMapOrder[swapIndex] = temporary;
+  }
+}
 
 // 每张地图使用不同方向的锚点寻找狙击塔位置。实际位置会在地图建成后
 // 从可达地面中自动微调，因此不会与房间、暗道、家具或玩家出生点重叠。
@@ -1094,9 +1429,25 @@ const sniperTowerLayouts = {
     [-36, 8, "东"],
     [36, -8, "西"]
   ],
-  "第一关：旧机修仓": [
+  "十字机修仓": [
     [-31, 9, "东"],
     [31, -9, "西"]
+  ],
+  "锯齿管线站": [
+    [-39, -18, "东"],
+    [38, 20, "西"]
+  ],
+  "三叉铸造枢纽": [
+    [-36, -10, "东"],
+    [36, 10, "西"]
+  ],
+  "回字能源堡": [
+    [-44, -29, "南"],
+    [44, 29, "北"]
+  ],
+  "九宫仓储区": [
+    [-43, 0, "东"],
+    [43, 0, "西"]
   ],
   "第二关：物流仓库群": [
     [-32, -8, "东"],
@@ -1153,6 +1504,7 @@ function clearMap() {
   scene.add(mapRoot);
 
   colliders.length = 0;
+  invalidateColliderSpatialGrid();
   platforms.length = 0;
   ladderZones.length = 0;
   raycastWorld.length = 0;
@@ -1165,10 +1517,13 @@ function clearMap() {
 function loadCurrentMap() {
   clearMap();
 
-  if (selectedMode === "无尽") {
+  if (selectedMode === "无尽" || selectedMode === "团队") {
     endlessMapBuilders[selectedEndlessMap]();
   } else {
-    levelMapBuilders[currentLevel - 1]();
+    if (campaignMapOrder.length < 5) prepareCampaignMapOrder();
+    const mapPoolIndex = campaignMapOrder[currentLevel - 1];
+    const builder = campaignMapBuilders[mapPoolIndex] || campaignMapBuilders[0];
+    builder();
   }
 
   // 无尽与关卡地图共用装饰阶段，墙画、家具都会参与当前地图生命周期。
@@ -1177,9 +1532,11 @@ function loadCurrentMap() {
   // 先计算一次一层连通区域，狙击塔会从这些可达地面点附近选址；建塔后
   // 再重算一次导航，保证塔柱和梯脚也进入最终碰撞与寻路数据。
   mapRoot.updateMatrixWorld(true);
+  rebuildColliderSpatialGrid();
   filterSpawnPointsByReachability();
   addSniperTowersForCurrentMap();
   mapRoot.updateMatrixWorld(true);
+  rebuildColliderSpatialGrid();
   filterSpawnPointsByReachability();
 
   // 立即刷新建筑矩阵，保证首帧碰撞射线和敌人视线检测使用新地图坐标。

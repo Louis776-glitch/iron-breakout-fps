@@ -3,17 +3,30 @@
 // -----------------------------------------------------------------------
 // 模式流程、五关切换和界面状态
 // -----------------------------------------------------------------------
+function requestGamePointerLock() {
+  try {
+    const request = renderer.domElement.requestPointerLock();
+    if (request && typeof request.catch === "function") {
+      request.catch(function () {
+        // 浏览器要求由真实点击触发时会拒绝自动锁定；玩家下一次点击暂停层
+        // 即可继续，不把这一正常限制记录成未处理异常。
+      });
+    }
+  } catch (error) {
+    // 不支持指针锁定的环境仍可显示页面和运行自动测试。
+  }
+}
+
 function clearEnemiesAndEffects() {
+  if (typeof teamClearActors === "function" && teamActorById.size > 0) {
+    teamClearActors();
+  }
   for (const enemy of enemies) {
     scene.remove(enemy.group);
   }
   enemies.length = 0;
 
-  for (const effect of effects) {
-    scene.remove(effect.group);
-    effect.material.dispose();
-  }
-  effects.length = 0;
+  clearImpactEffects();
   respawnTimers.length = 0;
 
   for (const projectile of playerProjectiles) {
@@ -23,6 +36,17 @@ function clearEnemiesAndEffects() {
     scene.remove(projectile.group);
   }
   playerProjectiles.length = 0;
+}
+
+// 新地图第一次绘制会编译材质和生成阴影贴图。把这项工作放在取得鼠标
+// 控制之前完成，避免玩家刚开始转动视角时遇到集中编译造成的长帧。
+function warmUpBattleRenderer() {
+  setImpactEffectsCompileVisible(true);
+  renderer.shadowMap.needsUpdate = true;
+  renderer.compile(scene, camera);
+  renderer.render(scene, camera);
+  setImpactEffectsCompileVisible(false);
+  shadowRefreshTimer = 0.1;
 }
 
 function resetPlayer() {
@@ -83,6 +107,7 @@ function startGame(mode) {
   levelKills = 0;
   levelSpawned = 0;
   gameState = "战斗";
+  if (mode === "关卡") prepareCampaignMapOrder();
 
   clearEnemiesAndEffects();
   loadCurrentMap();
@@ -91,11 +116,16 @@ function startGame(mode) {
 
   modeScreen.classList.add("hidden");
   endlessMapScreen.classList.add("hidden");
+  armoryScreen.classList.add("hidden");
+  teamLobbyScreen.classList.add("hidden");
+  teamScoreboard.classList.add("hidden");
+  teamRespawnOverlay.classList.add("hidden");
   pauseScreen.classList.add("hidden");
   resultScreen.classList.add("hidden");
   updateGameInfo();
+  warmUpBattleRenderer();
 
-  renderer.domElement.requestPointerLock();
+  requestGamePointerLock();
 }
 
 function startCurrentLevel() {
@@ -111,7 +141,8 @@ function startCurrentLevel() {
   resultScreen.classList.add("hidden");
   pauseScreen.classList.add("hidden");
   updateGameInfo();
-  renderer.domElement.requestPointerLock();
+  warmUpBattleRenderer();
+  requestGamePointerLock();
 }
 
 function completeCurrentLevel() {
@@ -140,7 +171,7 @@ function completeCurrentLevel() {
     resultSummary.textContent =
       "本关二十五名敌人已全部消灭　累计分数：" + score;
     resultPrompt.textContent =
-      "下一关威胁等级将提升至 " + (currentLevel + 1);
+      "下一关将随机进入另一张地图　威胁等级提升至 " + (currentLevel + 1);
     resultActionButton.textContent = "进入下一关";
   }
 }
@@ -167,14 +198,24 @@ function showGameOver() {
 
 function restartSelectedMode() {
   if (!selectedMode) return;
+  if (selectedMode === "团队") {
+    if (teamNetworkRole === "offline") restartOfflineTeamBattle();
+    return;
+  }
   startGame(selectedMode);
 }
 
 function showModeMenu() {
+  const leavingTeamMode = selectedMode === "团队";
   gameState = "菜单";
-  selectedMode = null;
   firing = false;
   setAiming(false);
+  if (leavingTeamMode) {
+    teamClearActors();
+    teamCloseSocket();
+    hideTeamModeUi();
+  }
+  selectedMode = null;
   resetAllAmmo();
   setCurrentWeapon("机枪", false);
   clearEnemiesAndEffects();
@@ -187,6 +228,10 @@ function showModeMenu() {
   resultScreen.classList.add("hidden");
   pauseScreen.classList.add("hidden");
   endlessMapScreen.classList.add("hidden");
+  armoryScreen.classList.add("hidden");
+  teamLobbyScreen.classList.add("hidden");
+  teamScoreboard.classList.add("hidden");
+  teamRespawnOverlay.classList.add("hidden");
   modeScreen.classList.remove("hidden");
 
   modeText.textContent = "尚未选择";
@@ -200,6 +245,10 @@ function showModeMenu() {
 }
 
 function updateGameInfo() {
+  if (selectedMode === "团队") {
+    updateTeamHud(true);
+    return;
+  }
   const stats = selectedMode ? getDifficultyStats() : { tier: 1 };
   modeText.textContent = selectedMode
     ? selectedMode + "模式"
@@ -213,7 +262,7 @@ function updateGameInfo() {
       "无尽作战：敌人会持续复活　每 800 分提升一次威胁等级";
   } else if (selectedMode === "关卡") {
     objective.textContent =
-      "第 " + currentLevel + " 关：已消灭 " +
+      "第 " + currentLevel + " 关 · " + currentMapName + "：已消灭 " +
       levelKills + " / " + LEVEL_ENEMY_TOTAL;
   }
 }
@@ -221,10 +270,15 @@ function updateGameInfo() {
 // -----------------------------------------------------------------------
 // 鼠标锁定与键盘输入
 // -----------------------------------------------------------------------
+let pointerLockMouseGuard = 0;
+
 function onPointerLockChange() {
   const locked = document.pointerLockElement === renderer.domElement;
 
   if (locked) {
+    // 浏览器刚切换指针锁定时偶尔会送来包含旧光标位移的事件；丢弃前两个
+    // 高频事件可避免入场瞬间视角突跳，持续时间通常不到几毫秒。
+    pointerLockMouseGuard = 2;
     pauseScreen.classList.add("hidden");
   } else {
     firing = false;
@@ -256,10 +310,43 @@ document.getElementById("levelModeButton").addEventListener("click", function ()
   startGame("关卡");
 });
 
-pauseScreen.addEventListener("click", function () {
+document.getElementById("armoryButton").addEventListener("click", function () {
+  modeScreen.classList.add("hidden");
+  armoryScreen.classList.remove("hidden");
+  selectArmoryWeapon(armorySelectedWeapon);
+  resizeArmoryRenderer();
+});
+
+document.getElementById("backFromArmoryButton").addEventListener("click", function () {
+  armoryScreen.classList.add("hidden");
+  modeScreen.classList.remove("hidden");
+});
+
+const pausePanel = pauseScreen.querySelector(".panel");
+const pauseResumeButton = document.getElementById("pauseResumeButton");
+const pauseReturnMenuButton = document.getElementById("pauseReturnMenuButton");
+
+// 暂停面板内的点击不再冒泡给暗色背景，避免玩家本想
+// 点“返回主菜单”却被背景事件重新锁定鼠标。
+pausePanel.addEventListener("click", function (event) {
+  event.stopPropagation();
+});
+
+pauseScreen.addEventListener("click", function (event) {
+  if (event.target !== pauseScreen) return;
   if (gameState === "战斗") {
-    renderer.domElement.requestPointerLock();
+    requestGamePointerLock();
   }
+});
+
+pauseResumeButton.addEventListener("click", function (event) {
+  event.stopPropagation();
+  if (gameState === "战斗") requestGamePointerLock();
+});
+
+pauseReturnMenuButton.addEventListener("click", function (event) {
+  event.stopPropagation();
+  showModeMenu();
 });
 
 resultActionButton.addEventListener("click", function () {
@@ -268,6 +355,8 @@ resultActionButton.addEventListener("click", function () {
     startCurrentLevel();
   } else if (gameState === "通关") {
     startGame("关卡");
+  } else if (gameState === "团队结束" && teamNetworkRole === "offline") {
+    restartOfflineTeamBattle();
   }
 });
 
@@ -282,9 +371,16 @@ document.addEventListener("mousemove", function (event) {
     return;
   }
 
+  if (pointerLockMouseGuard > 0) {
+    pointerLockMouseGuard--;
+    return;
+  }
+
   const sensitivity = aiming ? 0.00072 : 0.00215;
-  player.yaw -= event.movementX * sensitivity;
-  player.pitch -= event.movementY * sensitivity;
+  const movementX = THREE.MathUtils.clamp(event.movementX, -120, 120);
+  const movementY = THREE.MathUtils.clamp(event.movementY, -120, 120);
+  player.yaw -= movementX * sensitivity;
+  player.pitch -= movementY * sensitivity;
   player.pitch = THREE.MathUtils.clamp(
     player.pitch,
     -Math.PI / 2 + 0.04,
@@ -300,10 +396,19 @@ document.addEventListener("mousedown", function (event) {
     firing = true;
     shoot();
   }
+
+  if (
+    event.button === 2 &&
+    document.pointerLockElement === renderer.domElement
+  ) {
+    event.preventDefault();
+    setAiming(true);
+  }
 });
 
 document.addEventListener("mouseup", function (event) {
   if (event.button === 0) firing = false;
+  if (event.button === 2) setAiming(false);
 });
 
 document.addEventListener("contextmenu", function (event) {
@@ -313,8 +418,13 @@ document.addEventListener("contextmenu", function (event) {
 document.addEventListener("keydown", function (event) {
   keys[event.code] = true;
 
-  if (event.code === "KeyQ") {
-    setAiming(true);
+  if (
+    event.code === "KeyF" &&
+    !event.repeat &&
+    gameState === "战斗" &&
+    document.pointerLockElement === renderer.domElement
+  ) {
+    trySwapNearbyWeapon();
   }
 
   if (event.code === "Space") {
@@ -345,7 +455,6 @@ document.addEventListener("keydown", function (event) {
 
 document.addEventListener("keyup", function (event) {
   keys[event.code] = false;
-  if (event.code === "KeyQ") setAiming(false);
 });
 
 window.addEventListener("blur", function () {
@@ -369,15 +478,26 @@ function animate() {
   const delta = Math.min(clock.getDelta(), 0.05);
 
   updatePlayer(delta);
-  if (firing) shoot();
+  if (firing && weaponProfiles[currentWeapon].automatic !== false) shoot();
   updateWeapon(delta);
   updatePlayerProjectiles(delta);
-  updateEnemyAI(delta);
-  maintainEnemyPopulation();
+  if (selectedMode === "团队") {
+    updateTeamMode(delta);
+  } else {
+    updateEnemyAI(delta);
+    maintainEnemyPopulation();
+  }
   updatePickups(delta);
   updateEffects(delta);
   updateVisualUI(delta);
   updateMinimap(delta);
+  updateArmoryPreview(delta);
+
+  shadowRefreshTimer -= delta;
+  if (selectedMode !== "团队" && shadowRefreshTimer <= 0) {
+    renderer.shadowMap.needsUpdate = true;
+    shadowRefreshTimer = 0.1;
+  }
   renderer.render(scene, camera);
 }
 

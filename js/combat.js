@@ -3,73 +3,140 @@
 // -----------------------------------------------------------------------
 // 射击、命中特效和击杀结算
 // -----------------------------------------------------------------------
-const sparkGeometry = new THREE.SphereGeometry(0.035, 6, 4);
+const IMPACT_PARTICLE_COUNT = 8;
+const IMPACT_EFFECT_POOL_SIZE = 20;
 
-function spawnImpact(position, normal, hitEnemy) {
-  const color = hitEnemy ? 0xff4a24 : 0xffc24a;
-  const group = new THREE.Group();
-  group.position.copy(position).addScaledVector(normal, 0.025);
-  scene.add(group);
-
-  const material = new THREE.MeshBasicMaterial({
-    color: color,
-    transparent: true,
-    opacity: 1,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  });
-
-  const particles = [];
-  for (let i = 0; i < 8; i++) {
-    const spark = new THREE.Mesh(sparkGeometry, material);
-    const direction = new THREE.Vector3(
-      THREE.MathUtils.randFloatSpread(1),
-      Math.random() * 0.85,
-      THREE.MathUtils.randFloatSpread(1)
-    ).normalize();
-    direction.addScaledVector(normal, 1.4).normalize();
-    spark.userData.velocity = direction.multiplyScalar(
-      THREE.MathUtils.randFloat(1.8, 5)
+// 命中特效使用固定对象池：开枪时不再临时创建 8 个网格、材质和点光源。
+// 动态增删点光源会让大量 MeshStandardMaterial 重新编译着色器，是原先
+// “子弹刚命中就卡一下”的主要原因之一。
+function initializeImpactEffectPool() {
+  for (let poolIndex = 0; poolIndex < IMPACT_EFFECT_POOL_SIZE; poolIndex++) {
+    const positions = new Float32Array(IMPACT_PARTICLE_COUNT * 3);
+    const velocities = new Float32Array(IMPACT_PARTICLE_COUNT * 3);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
     );
-    group.add(spark);
-    particles.push(spark);
+    const material = new THREE.PointsMaterial({
+      color: 0xffc24a,
+      size: 0.105,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const points = new THREE.Points(geometry, material);
+    points.visible = false;
+    points.frustumCulled = false;
+    scene.add(points);
+
+    effects.push({
+      active: false,
+      points: points,
+      geometry: geometry,
+      material: material,
+      positions: positions,
+      velocities: velocities,
+      age: 0,
+      lifetime: 0.34
+    });
+  }
+}
+
+function spawnImpact(position, normal, hitEnemy, colorOverride) {
+  let effect = null;
+  for (const candidate of effects) {
+    if (!candidate.active) {
+      effect = candidate;
+      break;
+    }
   }
 
-  const light = new THREE.PointLight(color, 6, 3.5, 2);
-  group.add(light);
+  // 极端连续爆炸超过池容量时复用最老特效，避免任何运行时分配。
+  if (!effect) {
+    effect = effects[0];
+    for (const candidate of effects) {
+      if (candidate.age > effect.age) effect = candidate;
+    }
+  }
 
-  effects.push({
-    group: group,
-    material: material,
-    particles: particles,
-    light: light,
-    age: 0,
-    lifetime: 0.34
-  });
+  effect.active = true;
+  effect.age = 0;
+  effect.material.color.setHex(
+    colorOverride === undefined
+      ? (hitEnemy ? 0xff4a24 : 0xffc24a)
+      : colorOverride
+  );
+  effect.material.opacity = 1;
+  effect.material.size = hitEnemy ? 0.12 : 0.105;
+  effect.points.position.copy(position).addScaledVector(normal, 0.025);
+  effect.points.visible = true;
+  effect.positions.fill(0);
+
+  for (let i = 0; i < IMPACT_PARTICLE_COUNT; i++) {
+    const offset = i * 3;
+    let directionX = THREE.MathUtils.randFloatSpread(1) + normal.x * 1.4;
+    let directionY = Math.random() * 0.85 + normal.y * 1.4;
+    let directionZ = THREE.MathUtils.randFloatSpread(1) + normal.z * 1.4;
+    const inverseLength = 1 / Math.max(
+      0.0001,
+      Math.hypot(directionX, directionY, directionZ)
+    );
+    const speed = THREE.MathUtils.randFloat(1.8, 5);
+    directionX *= inverseLength * speed;
+    directionY *= inverseLength * speed;
+    directionZ *= inverseLength * speed;
+    effect.velocities[offset] = directionX;
+    effect.velocities[offset + 1] = directionY;
+    effect.velocities[offset + 2] = directionZ;
+  }
+
+  effect.geometry.attributes.position.needsUpdate = true;
+}
+
+function clearImpactEffects() {
+  for (const effect of effects) {
+    effect.active = false;
+    effect.points.visible = false;
+    effect.material.opacity = 0;
+  }
+}
+
+function setImpactEffectsCompileVisible(visible) {
+  // 只需预编译一个 PointsMaterial；其余池成员使用相同着色器程序。
+  if (effects.length <= 0 || effects[0].active) return;
+  effects[0].points.visible = visible;
+  effects[0].material.opacity = 0;
 }
 
 function updateEffects(delta) {
-  for (let i = effects.length - 1; i >= 0; i--) {
-    const effect = effects[i];
+  for (const effect of effects) {
+    if (!effect.active) continue;
     effect.age += delta;
-    const life = 1 - effect.age / effect.lifetime;
+    const life = Math.max(0, 1 - effect.age / effect.lifetime);
 
-    for (const particle of effect.particles) {
-      particle.position.addScaledVector(particle.userData.velocity, delta);
-      particle.userData.velocity.y -= 8 * delta;
-      particle.scale.setScalar(Math.max(0.01, life));
+    for (let i = 0; i < IMPACT_PARTICLE_COUNT; i++) {
+      const offset = i * 3;
+      effect.positions[offset] += effect.velocities[offset] * delta;
+      effect.positions[offset + 1] += effect.velocities[offset + 1] * delta;
+      effect.positions[offset + 2] += effect.velocities[offset + 2] * delta;
+      effect.velocities[offset + 1] -= 8 * delta;
     }
 
-    effect.material.opacity = Math.max(0, life);
-    effect.light.intensity = Math.max(0, life * 6);
+    effect.geometry.attributes.position.needsUpdate = true;
+    effect.material.opacity = life;
 
     if (effect.age >= effect.lifetime) {
-      scene.remove(effect.group);
-      effect.material.dispose();
-      effects.splice(i, 1);
+      effect.active = false;
+      effect.points.visible = false;
+      effect.material.opacity = 0;
     }
   }
 }
+
+initializeImpactEffectPool();
 
 function findEnemyFromObject(object) {
   let current = object;
@@ -85,52 +152,111 @@ function findEnemyFromObject(object) {
 const projectileRaycaster = new THREE.Raycaster();
 const projectileDirection = new THREE.Vector3();
 const projectileStep = new THREE.Vector3();
+const projectileTargets = [];
+const projectileHits = [];
+const playerShotEnemyTargets = [];
+const playerShotWorldHits = [];
+const playerShotEnemyHits = [];
+const playerAimPoint = new THREE.Vector2(0, 0);
+const shotWorldNormal = new THREE.Vector3();
+const playerShotDirection = new THREE.Vector3();
+const playerShotRight = new THREE.Vector3();
+const playerShotUp = new THREE.Vector3();
+const playerShotOrigin = new THREE.Vector3();
 const projectileMetalMaterial = new THREE.MeshStandardMaterial({
   color: 0xc9d3d8, roughness: 0.28, metalness: 0.82
 });
 const rocketBodyMaterial = new THREE.MeshStandardMaterial({
   color: 0x4c6550, roughness: 0.58, metalness: 0.38
 });
+const rocketFlameMaterial = new THREE.MeshBasicMaterial({
+  color: 0xff7a24,
+  transparent: true,
+  opacity: 0.92,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false
+});
+const grenadeBodyMaterial = new THREE.MeshStandardMaterial({
+  color: 0x687545, roughness: 0.55, metalness: 0.42
+});
 
 function damageEnemy(enemy, amount) {
   if (!enemy || !enemy.alive) return;
+  if (selectedMode === "团队" && enemy.isTeamActor) {
+    damageTeamActor(enemy, amount, teamLocalTeam);
+    return;
+  }
   enemy.health -= amount;
   hitFlash = 0.12;
   if (enemy.health <= 0) killEnemy(enemy);
+}
+
+function applyEnemySlow(enemy, duration, factor) {
+  if (!enemy || !enemy.alive) return;
+  enemy.slowTimer = Math.max(enemy.slowTimer || 0, duration);
+  enemy.slowFactor = Math.min(enemy.slowFactor || 1, factor);
 }
 
 function createPlayerProjectile(kind, profile) {
   camera.updateMatrixWorld(true);
   const direction = camera.getWorldDirection(new THREE.Vector3()).normalize();
   const group = new THREE.Group();
-  const speed = 17;
-  const lifetime = 6.5;
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.085, 0.085, 0.72, 10),
-    rocketBodyMaterial
-  );
-  body.rotation.x = Math.PI / 2;
-  group.add(body);
-  const nose = new THREE.Mesh(
-    new THREE.ConeGeometry(0.09, 0.22, 10),
-    projectileMetalMaterial
-  );
-  nose.rotation.x = -Math.PI / 2;
-  nose.position.z = -0.45;
-  group.add(nose);
-  const flame = new THREE.PointLight(0xff7a24, 4.5, 3.2, 2);
-  flame.position.z = 0.38;
-  group.add(flame);
+  const isGrenade = kind === "grenade";
+  const speed = isGrenade ? 15 : 17;
+  const lifetime = isGrenade ? 4 : 6.5;
+
+  if (isGrenade) {
+    const body = new THREE.Mesh(
+      new THREE.SphereGeometry(0.15, 10, 7),
+      grenadeBodyMaterial
+    );
+    body.scale.z = 1.25;
+    group.add(body);
+    for (const z of [-0.11, 0.11]) {
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(0.13, 0.018, 6, 12),
+        projectileMetalMaterial
+      );
+      band.position.z = z;
+      group.add(band);
+    }
+  } else {
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.085, 0.085, 0.72, 10),
+      rocketBodyMaterial
+    );
+    body.rotation.x = Math.PI / 2;
+    group.add(body);
+    const nose = new THREE.Mesh(
+      new THREE.ConeGeometry(0.09, 0.22, 10),
+      projectileMetalMaterial
+    );
+    nose.rotation.x = -Math.PI / 2;
+    nose.position.z = -0.45;
+    group.add(nose);
+    // 使用自发光几何体代替运行时增删 PointLight，避免着色器重新编译。
+    const flame = new THREE.Mesh(
+      new THREE.SphereGeometry(0.13, 7, 5),
+      rocketFlameMaterial
+    );
+    flame.position.z = 0.38;
+    flame.scale.z = 1.8;
+    group.add(flame);
+  }
 
   group.quaternion.copy(camera.quaternion);
   group.position.copy(camera.position).addScaledVector(direction, 0.72);
   scene.add(group);
+  const velocity = direction.multiplyScalar(speed);
+  if (isGrenade) velocity.y += 4.2;
   playerProjectiles.push({
     kind: kind,
     group: group,
-    velocity: direction.multiplyScalar(speed),
+    velocity: velocity,
     damage: profile.damage,
-    lifetime: lifetime
+    lifetime: lifetime,
+    gravity: isGrenade ? 12 : 0,
+    blastRadius: profile.blastRadius || (isGrenade ? 4.6 : 5.2)
   });
 }
 
@@ -143,8 +269,7 @@ function removePlayerProjectile(projectile) {
   if (index >= 0) playerProjectiles.splice(index, 1);
 }
 
-function explodeRocket(position, baseDamage) {
-  const radius = 5.2;
+function explodePlayerProjectile(position, baseDamage, radius, color) {
   // 从多个方向喷发既能照亮爆心，也沿用现有的火花粒子系统。
   for (let i = 0; i < 6; i++) {
     const normal = new THREE.Vector3(
@@ -152,7 +277,7 @@ function explodeRocket(position, baseDamage) {
       Math.random() * 0.9 + 0.15,
       THREE.MathUtils.randFloatSpread(1)
     ).normalize();
-    spawnImpact(position, normal, false);
+    spawnImpact(position, normal, false, color);
   }
 
   for (const enemy of enemies.slice()) {
@@ -168,18 +293,37 @@ function explodeRocket(position, baseDamage) {
   cameraShake = Math.min(0.07, cameraShake + 0.045);
 }
 
+function explodeRocket(position, baseDamage, radius) {
+  explodePlayerProjectile(position, baseDamage, radius || 5.2, 0xff9b35);
+}
+
+function explodeGrenade(position, baseDamage, radius) {
+  explodePlayerProjectile(position, baseDamage, radius || 4.6, 0xd7ff62);
+}
+
 function updatePlayerProjectiles(delta) {
   if (gameState !== "战斗") return;
   for (const projectile of playerProjectiles.slice()) {
     projectile.lifetime -= delta;
     if (projectile.lifetime <= 0) {
       if (projectile.kind === "rocket") {
-        explodeRocket(projectile.group.position.clone(), projectile.damage);
+        explodeRocket(
+          projectile.group.position.clone(),
+          projectile.damage,
+          projectile.blastRadius
+        );
+      } else if (projectile.kind === "grenade") {
+        explodeGrenade(
+          projectile.group.position.clone(),
+          projectile.damage,
+          projectile.blastRadius
+        );
       }
       removePlayerProjectile(projectile);
       continue;
     }
 
+    if (projectile.gravity > 0) projectile.velocity.y -= projectile.gravity * delta;
     projectileStep.copy(projectile.velocity).multiplyScalar(delta);
     const travelDistance = projectileStep.length();
     projectileDirection.copy(projectile.velocity).normalize();
@@ -187,21 +331,31 @@ function updatePlayerProjectiles(delta) {
     projectileRaycaster.near = 0;
     projectileRaycaster.far = travelDistance + 0.08;
 
-    const targets = raycastWorld.slice();
+    projectileTargets.length = 0;
+    projectileTargets.push.apply(projectileTargets, raycastWorld);
     for (const enemy of enemies) {
-      if (enemy.alive) targets.push.apply(targets, enemy.hitMeshes);
+      if (enemy.alive && canLocalPlayerDamageActor(enemy)) {
+        projectileTargets.push.apply(projectileTargets, enemy.hitMeshes);
+      }
     }
-    const hits = projectileRaycaster.intersectObjects(targets, false);
+    projectileHits.length = 0;
+    projectileRaycaster.intersectObjects(
+      projectileTargets,
+      false,
+      projectileHits
+    );
 
-    if (hits.length > 0) {
-      const hit = hits[0];
+    if (projectileHits.length > 0) {
+      const hit = projectileHits[0];
       const enemy = findEnemyFromObject(hit.object);
       const normal = hit.face
-        ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
-        : new THREE.Vector3(0, 1, 0);
+        ? shotWorldNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld)
+        : shotWorldNormal.set(0, 1, 0);
 
       if (projectile.kind === "rocket") {
-        explodeRocket(hit.point, projectile.damage);
+        explodeRocket(hit.point, projectile.damage, projectile.blastRadius);
+      } else if (projectile.kind === "grenade") {
+        explodeGrenade(hit.point, projectile.damage, projectile.blastRadius);
       } else {
         spawnImpact(hit.point, normal, Boolean(enemy && enemy.alive));
         if (enemy && enemy.alive) damageEnemy(enemy, projectile.damage);
@@ -213,14 +367,67 @@ function updatePlayerProjectiles(delta) {
     projectile.group.position.add(projectileStep);
     if (projectile.kind === "rocket") {
       projectile.group.rotation.z += delta * 6;
+    } else if (projectile.kind === "grenade") {
+      projectile.group.rotation.x += delta * 8;
+      projectile.group.rotation.y += delta * 5;
     }
   }
+}
+
+function firePlayerRay(origin, direction, profile, impactColor) {
+  raycaster.set(origin, direction);
+  raycaster.near = 0;
+  raycaster.far = profile.range;
+  playerShotWorldHits.length = 0;
+  raycaster.intersectObjects(raycastWorld, false, playerShotWorldHits);
+
+  playerShotEnemyTargets.length = 0;
+  for (const enemy of enemies) {
+    if (enemy.alive && canLocalPlayerDamageActor(enemy)) {
+      playerShotEnemyTargets.push.apply(playerShotEnemyTargets, enemy.hitMeshes);
+    }
+  }
+  playerShotEnemyHits.length = 0;
+  raycaster.intersectObjects(
+    playerShotEnemyTargets,
+    false,
+    playerShotEnemyHits
+  );
+
+  const worldHit = playerShotWorldHits[0] || null;
+  const enemyHit = playerShotEnemyHits[0] || null;
+  const hit = !worldHit
+    ? enemyHit
+    : !enemyHit
+      ? worldHit
+      : enemyHit.distance < worldHit.distance ? enemyHit : worldHit;
+  if (!hit) return null;
+
+  const enemy = findEnemyFromObject(hit.object);
+  const worldNormal = hit.face
+    ? shotWorldNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld)
+    : shotWorldNormal.set(0, 1, 0);
+  spawnImpact(
+    hit.point,
+    worldNormal,
+    Boolean(enemy && enemy.alive),
+    impactColor
+  );
+
+  if (enemy && enemy.alive) {
+    damageEnemy(enemy, profile.damage);
+    if (profile.type === "taser" && enemy.alive) {
+      applyEnemySlow(enemy, 3, 0.45);
+    }
+  }
+  return hit;
 }
 
 function shoot() {
   if (
     gameState !== "战斗" ||
-    document.pointerLockElement !== renderer.domElement
+    document.pointerLockElement !== renderer.domElement ||
+    !isTeamLocalPlayerActive()
   ) {
     return;
   }
@@ -264,36 +471,53 @@ function shoot() {
     player.pitch + THREE.MathUtils.randFloat(0.002, profile.shake * 0.48 + 0.003)
   );
 
-  if (profile.type === "rocket") {
+  if (profile.type === "rocket" || profile.type === "grenade") {
     createPlayerProjectile(profile.type, profile);
     return;
   }
 
-  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-  raycaster.far = profile.range;
-  const targets = raycastWorld.slice();
-  for (const enemy of enemies) {
-    if (enemy.alive) targets.push.apply(targets, enemy.hitMeshes);
+  camera.updateMatrixWorld(true);
+  playerShotOrigin.copy(camera.position);
+  camera.getWorldDirection(playerShotDirection).normalize();
+
+  if (profile.type === "shotgun") {
+    playerShotRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    playerShotUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    for (let pellet = 0; pellet < profile.pellets; pellet++) {
+      const pelletDirection = tempVector3
+        .copy(playerShotDirection)
+        .addScaledVector(
+          playerShotRight,
+          THREE.MathUtils.randFloatSpread(profile.spread)
+        )
+        .addScaledVector(
+          playerShotUp,
+          THREE.MathUtils.randFloatSpread(profile.spread)
+        )
+        .normalize();
+      firePlayerRay(playerShotOrigin, pelletDirection, profile);
+    }
+    return;
   }
 
-  const intersections = raycaster.intersectObjects(targets, false);
-  if (intersections.length === 0) return;
+  firePlayerRay(
+    playerShotOrigin,
+    playerShotDirection,
+    profile,
+    profile.type === "taser" ? 0x36e7ff : undefined
+  );
 
-  const hit = intersections[0];
-  const enemy = findEnemyFromObject(hit.object);
-  const worldNormal = hit.face
-    ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
-    : new THREE.Vector3(0, 1, 0);
-
-  spawnImpact(hit.point, worldNormal, Boolean(enemy && enemy.alive));
-
-  if (enemy && enemy.alive) {
-    damageEnemy(enemy, profile.damage);
-  }
+  if (selectedMode === "团队") teamBroadcastLocalFire(currentWeapon);
 }
 
 function killEnemy(enemy) {
   if (!enemy.alive) return;
+
+  if (selectedMode === "团队" && enemy.isTeamActor) {
+    teamEliminateActor(enemy, teamLocalTeam);
+    updateTeamHud(true);
+    return;
+  }
 
   enemy.alive = false;
   scene.remove(enemy.group);
@@ -325,8 +549,17 @@ function killEnemy(enemy) {
 function damagePlayer(amount) {
   if (gameState !== "战斗") return;
 
+  if (selectedMode === "团队") {
+    damageTeamLocalPlayer(amount, teamOpposite(teamLocalTeam));
+    return;
+  }
+
   player.health = Math.max(0, player.health - amount);
-  damageFlash = Math.min(1, damageFlash + amount * 0.028);
+  // 即使单发伤害较低也产生清晰的暗红受击脉冲；连续受击会自然叠加。
+  damageFlash = Math.min(
+    1,
+    Math.max(damageFlash, 0.52) + amount * 0.022
+  );
   updateHealthUI();
 
   if (player.health <= 0) {
@@ -386,7 +619,7 @@ function getSupportHeight(x, z, oldY, newY) {
 function findCeilingHeight(x, z, oldTop, newTop) {
   let ceiling = Infinity;
 
-  for (const box of colliders) {
+  for (const box of nearbyColliders(x, z, player.radius * 0.8)) {
     if (
       box.minY >= oldTop - 0.04 &&
       box.minY <= newTop + 0.02 &&
@@ -401,6 +634,16 @@ function findCeilingHeight(x, z, oldTop, newTop) {
 
 function updatePlayer(delta) {
   if (gameState !== "战斗") return;
+
+  if (!isTeamLocalPlayerActive()) {
+    climbHint.style.opacity = "0";
+    camera.position.set(
+      player.position.x,
+      player.position.y + player.eyeHeight,
+      player.position.z
+    );
+    return;
+  }
 
   const locked = document.pointerLockElement === renderer.domElement;
   if (!locked) {
@@ -452,7 +695,7 @@ function updatePlayer(delta) {
       0,
       -Math.sin(player.yaw)
     );
-    const movement = new THREE.Vector3()
+    const movement = tempVector3.set(0, 0, 0)
       .addScaledVector(forward, inputZ)
       .addScaledVector(right, inputX)
       .normalize();
@@ -586,7 +829,7 @@ function updateWeapon(delta) {
   }
 
   // 进入狙击镜时隐藏第一人称枪身，避免模型遮住镜片中心。
-  weapon.visible = !aiming;
+  weapon.visible = !aiming && isTeamLocalPlayerActive();
 
   muzzleTimer -= delta;
   if (muzzleTimer <= 0) {
@@ -599,7 +842,16 @@ function updateWeapon(delta) {
 
 function updateVisualUI(delta) {
   damageFlash = THREE.MathUtils.damp(damageFlash, 0, 7, delta);
-  damageVignette.style.opacity = String(Math.min(0.9, damageFlash));
+  const criticalHealth =
+    gameState === "战斗" &&
+    player.health > 0 &&
+    player.health < 30;
+  const criticalPulse = criticalHealth
+    ? 0.4 + Math.sin(performance.now() * 0.0045) * 0.045
+    : 0;
+  damageVignette.style.opacity = String(
+    Math.max(criticalPulse, Math.min(0.92, damageFlash))
+  );
 
   hitFlash = Math.max(0, hitFlash - delta);
   hitMarker.style.opacity = hitFlash > 0
